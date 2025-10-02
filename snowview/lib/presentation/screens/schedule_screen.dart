@@ -7,6 +7,7 @@ import 'schedule/day_view.dart';
 import 'schedule/week_view.dart';
 import 'schedule/month_view.dart';
 import 'schedule/event_sidebar.dart';
+import '../../services/calendar_database_service.dart';
 
 class ScheduleScreen extends StatefulWidget {
 	const ScheduleScreen({super.key});
@@ -20,8 +21,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	late int _year;
 	late int _month; // 1-12
 	DateTime _selected = DateTime.now();
-	final List<CalendarEvent> _events = [];
+	List<CalendarEvent> _events = [];
 	CalendarEvent? _selectedEvent;
+	
+	// 数据库服务
+	final CalendarDatabaseService _dbService = CalendarDatabaseService();
 
 	static const int _yearRange = 10; // 当前年 ±10 年
 
@@ -31,6 +35,14 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		final now = DateTime.now();
 		_year = now.year;
 		_month = now.month;
+		_loadEvents();
+	}
+	
+	// 从数据库加载活动
+	void _loadEvents() {
+		setState(() {
+			_events = _dbService.getAllCalendarEvents();
+		});
 	}
 
 	@override
@@ -66,7 +78,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 													DateTime(_selected.year, _selected.month, _selected.day, DateTime.now().hour + 1),
 												),
 												onEditEvent: _editEvent,
-												onDeleteEvent: _deleteEvent,
+												onDeleteEvent: _showDeleteEventDialog,
 												onClearSelection: () => setState(() => _selectedEvent = null),
 											),
 										),
@@ -176,24 +188,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 				return DayView(
 					date: _selected, 
 					events: _events,
-					onAddEvent: (event) => setState(() => _events.add(event)),
-					onUpdateEvent: (oldEvent, newEvent) {
-						setState(() {
-							final index = _events.indexOf(oldEvent);
-							if (index != -1) {
-								_events[index] = newEvent;
-								// 如果更新的是当前选中的活动，同时更新选中活动引用
-								if (_selectedEvent == oldEvent) {
-									_selectedEvent = newEvent;
-								}
-							}
-						});
-					},
-					onDeleteEvent: (event) {
-						setState(() {
-							_events.remove(event);
-						});
-					},
+					onAddEvent: _addEvent,
+					onUpdateEvent: _updateEvent,
+					onDeleteEvent: _deleteEvent,
 					onSelectEvent: (event) => setState(() => _selectedEvent = event),
 					onClearSelection: () => setState(() => _selectedEvent = null),
 				);
@@ -201,24 +198,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 				return WeekView(
 					centerDate: _selected, 
 					events: _events,
-					onAddEvent: (event) => setState(() => _events.add(event)),
-					onUpdateEvent: (oldEvent, newEvent) {
-						setState(() {
-							final index = _events.indexOf(oldEvent);
-							if (index != -1) {
-								_events[index] = newEvent;
-								// 如果更新的是当前选中的活动，同时更新选中活动引用
-								if (_selectedEvent == oldEvent) {
-									_selectedEvent = newEvent;
-								}
-							}
-						});
-					},
-					onDeleteEvent: (event) {
-						setState(() {
-							_events.remove(event);
-						});
-					},
+					onAddEvent: _addEvent,
+					onUpdateEvent: _updateEvent,
+					onDeleteEvent: _deleteEvent,
 					onSelectEvent: (event) => setState(() => _selectedEvent = event),
 					onClearSelection: () => setState(() => _selectedEvent = null),
 				);
@@ -250,6 +232,50 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		});
 	}
 
+	// 添加活动
+	Future<void> _addEvent(CalendarEvent event) async {
+		await _dbService.addEventFromCalendarEvent(event);
+		_loadEvents();
+	}
+	
+	// 更新活动
+	Future<void> _updateEvent(CalendarEvent oldEvent, CalendarEvent newEvent) async {
+		final eventId = _dbService.findEventId(oldEvent);
+		if (eventId != null) {
+			await _dbService.updateEventById(eventId, newEvent);
+			
+			// 直接更新本地事件列表，避免重新加载导致闪现
+			setState(() {
+				final index = _events.indexWhere((e) => e.id == oldEvent.id);
+				if (index != -1) {
+					_events[index] = newEvent;
+				}
+				// 如果更新的是当前选中的活动，同时更新选中活动引用
+				if (_selectedEvent?.id == oldEvent.id) {
+					_selectedEvent = newEvent;
+				}
+			});
+		}
+	}
+	
+	// 删除活动
+	Future<void> _deleteEvent(CalendarEvent event) async {
+		try {
+			await _dbService.deleteEventByCalendarEvent(event);
+			if (_selectedEvent == event) {
+				_selectedEvent = null;
+			}
+			_loadEvents();
+		} catch (e) {
+			// 如果删除失败，显示错误信息
+			if (mounted) {
+				ScaffoldMessenger.of(context).showSnackBar(
+					SnackBar(content: Text('删除活动失败: $e')),
+				);
+			}
+		}
+	}
+
 	Future<void> _openAddEventDialog(DateTime start, DateTime end) async {
 		final event = await showDialog<CalendarEvent>(
 			context: context,
@@ -257,9 +283,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		);
 		
 		if (event != null) {
-			setState(() {
-				_events.add(event);
-			});
+			await _addEvent(event);
 		}
 	}
 
@@ -326,25 +350,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	}
 
 
-	void _editEvent(CalendarEvent updatedEvent) {
-		setState(() {
-			// 找到原活动的索引
-			final index = _events.indexWhere((e) => 
-				e.title == _selectedEvent?.title &&
-				e.start == _selectedEvent?.start &&
-				e.end == _selectedEvent?.end
-			);
-			
-			if (index != -1) {
-				// 更新活动数据
-				_events[index] = updatedEvent;
-				// 更新选中的活动引用
-				_selectedEvent = updatedEvent;
-			}
-		});
+	void _editEvent(CalendarEvent updatedEvent) async {
+		if (_selectedEvent != null) {
+			await _updateEvent(_selectedEvent!, updatedEvent);
+		}
 	}
 
-	void _deleteEvent(CalendarEvent event) {
+	void _showDeleteEventDialog(CalendarEvent event) {
 		showDialog(
 			context: context,
 			builder: (context) => AlertDialog(
@@ -356,14 +368,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 						child: const Text('取消'),
 					),
 					TextButton(
-						onPressed: () {
-							setState(() {
-								_events.remove(event);
-								if (_selectedEvent == event) {
-									_selectedEvent = null;
-								}
-							});
+						onPressed: () async {
 							Navigator.of(context).pop();
+							await _deleteEvent(event);
 						},
 						style: TextButton.styleFrom(
 							foregroundColor: Theme.of(context).colorScheme.error,

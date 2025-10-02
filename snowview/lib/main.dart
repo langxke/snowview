@@ -1,14 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'core/theme/app_theme.dart';
 import 'presentation/providers/task_provider.dart';
 import 'presentation/providers/theme_provider.dart';
 import 'presentation/providers/schedule_provider.dart';
 import 'presentation/providers/focus_provider.dart';
 import 'presentation/screens/main_screen.dart';
+import 'data/models/calendar_event_hive.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // 初始化Hive
+  await initHive();
+  
   runApp(const MyApp());
+}
+
+Future<void> initHive() async {
+  // 初始化Hive Flutter
+  await Hive.initFlutter();
+  
+  // 注册适配器
+  Hive.registerAdapter(CalendarEventHiveAdapter());
+  
+  // 打开数据库
+  await Hive.openBox<CalendarEventHive>('calendar_events');
 }
 
 class MyApp extends StatelessWidget {

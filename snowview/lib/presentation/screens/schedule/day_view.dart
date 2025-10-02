@@ -38,14 +38,16 @@ class _DayViewState extends State<DayView> {
 	
 	// 活动选择状态
 	CalendarEvent? _selectedEvent;
+	String? _selectedEventId; // 用于跟踪选中活动的唯一标识
 	
 	// 活动调整大小状态
 	bool _isResizing = false;
 	bool _isResizingTop = false; // true表示调整顶部(开始时间)，false表示调整底部(结束时间)
 	CalendarEvent? _resizingEvent;
 	double? _initialResizeY; // 调整开始时的Y坐标
-	DateTime? _initialStartTime; // 调整开始时的开始时间
-	DateTime? _initialEndTime; // 调整开始时的结束时间
+	// 保存真正的原始时间，不会在拖拽过程中被修改
+	DateTime? _originalStartTime;
+	DateTime? _originalEndTime;
 	static const double _resizeHandleHeight = 12; // 调整手柄的高度
 	
 	// 活动移动状态
@@ -54,6 +56,7 @@ class _DayViewState extends State<DayView> {
 	double? _initialMoveY; // 移动开始时的Y坐标
 	DateTime? _initialMoveStartTime; // 移动开始时的开始时间
 	DateTime? _initialMoveEndTime; // 移动开始时的结束时间
+	bool _hasMoved = false; // 移动标记，用于判断是否实际移动
 
 	@override
 	Widget build(BuildContext context) {
@@ -171,6 +174,11 @@ class _DayViewState extends State<DayView> {
 	}
 
 	String _hourLabel(int h) => h.toString().padLeft(2, '0') + ':00';
+	
+	// 获取活动的唯一标识
+	String _getEventId(CalendarEvent event) {
+		return event.id;
+	}
 	
 	// 处理键盘事件
 	void _handleKeyEvent(KeyEvent event) {
@@ -467,25 +475,47 @@ class _DayViewState extends State<DayView> {
 		return TimeOfDay(hour: hour, minute: minute);
 	}
 	
-	// 获取当前日期的所有非全天活动
+	// 获取当前日期的所有非全天活动（优化版）
 	List<CalendarEvent> _getDayEvents() {
-		return widget.events.where((event) {
-			if (event.allDay) return false;
+		final currentDate = DateTime(widget.date.year, widget.date.month, widget.date.day);
+		final events = <CalendarEvent>[];
+		
+		// 获取正在操作的事件ID（避免重复计算）
+		final movingEventId = _isMoving ? _movingEvent?.id : null;
+		final resizingEventId = _isResizing ? _resizingEvent?.id : null;
+		
+		// 一次遍历处理所有逻辑
+		for (final event in widget.events) {
+			if (event.allDay) continue;
+			
 			final eventDate = DateTime(event.start.year, event.start.month, event.start.day);
-			final currentDate = DateTime(widget.date.year, widget.date.month, widget.date.day);
+			if (!eventDate.isAtSameMomentAs(currentDate)) continue;
 			
-			// 在移动过程中，始终显示正在移动的活动，即使日期可能暂时不匹配
-			if (_isMoving && _movingEvent == event) {
-				return true;
+			// 跳过正在操作的原始事件
+			if ((movingEventId != null && event.id == movingEventId) ||
+			    (resizingEventId != null && event.id == resizingEventId)) {
+				continue;
 			}
 			
-			// 在调整大小过程中，始终显示正在调整的活动
-			if (_isResizing && _resizingEvent == event) {
-				return true;
+			events.add(event);
+		}
+		
+		// 添加正在操作的事件到新位置
+		if (_isMoving && _movingEvent != null) {
+			final movingDate = DateTime(_movingEvent!.start.year, _movingEvent!.start.month, _movingEvent!.start.day);
+			if (movingDate.isAtSameMomentAs(currentDate)) {
+				events.add(_movingEvent!);
 			}
-			
-			return eventDate.isAtSameMomentAs(currentDate);
-		}).toList();
+		}
+		
+		if (_isResizing && _resizingEvent != null) {
+			final resizingDate = DateTime(_resizingEvent!.start.year, _resizingEvent!.start.month, _resizingEvent!.start.day);
+			if (resizingDate.isAtSameMomentAs(currentDate)) {
+				events.add(_resizingEvent!);
+			}
+		}
+		
+		return events;
 	}
 	
 	// 构建活动显示块
@@ -502,7 +532,7 @@ class _DayViewState extends State<DayView> {
 			final startY = (startMinutes / 15) * (_hourRowHeight / 4);
 			final endY = (endMinutes / 15) * (_hourRowHeight / 4);
 			final height = endY - startY;
-			final isSelected = _selectedEvent == event;
+			final isSelected = _selectedEventId != null && _selectedEventId == _getEventId(event);
 			
 			// 创建活动块
 			eventWidgets.add(
@@ -880,19 +910,21 @@ class _DayViewState extends State<DayView> {
 			_initialQuarter = null;
 			_isSelecting = false;
 			_selectedEvent = null; // 同时清除活动选择
+			_selectedEventId = null; // 清除选中活动ID
 			// 清除调整大小状态
 			_isResizing = false;
 			_isResizingTop = false;
 			_resizingEvent = null;
 			_initialResizeY = null;
-			_initialStartTime = null;
-			_initialEndTime = null;
+			_originalStartTime = null;
+			_originalEndTime = null;
 			// 清除移动状态
 			_isMoving = false;
 			_movingEvent = null;
 			_initialMoveY = null;
 			_initialMoveStartTime = null;
 			_initialMoveEndTime = null;
+			_hasMoved = false;
 		});
 		// 通知父组件清除选择
 		widget.onClearSelection?.call();
@@ -902,6 +934,7 @@ class _DayViewState extends State<DayView> {
 	void _selectEvent(CalendarEvent event) {
 		setState(() {
 			_selectedEvent = event;
+			_selectedEventId = _getEventId(event); // 设置选中活动ID
 			// 清除时间段选择
 			_selectedStartQuarter = null;
 			_selectedEndQuarter = null;
@@ -920,9 +953,11 @@ class _DayViewState extends State<DayView> {
 			_isResizingTop = isTop;
 			_resizingEvent = event;
 			_selectedEvent = event; // 确保事件被选中
+			_selectedEventId = _getEventId(event); // 设置选中活动ID
 			_initialResizeY = details.globalPosition.dy;
-			_initialStartTime = event.start;
-			_initialEndTime = event.end;
+			// 保存真正的原始时间，不会在拖拽过程中被修改
+			_originalStartTime = event.start;
+			_originalEndTime = event.end;
 		});
 	}
 	
@@ -934,50 +969,41 @@ class _DayViewState extends State<DayView> {
 		final totalDeltaY = details.globalPosition.dy - _initialResizeY!;
 		final deltaQuarters = (totalDeltaY / (_hourRowHeight / 4)).round();
 		
-		DateTime newStart = _initialStartTime!;
-		DateTime newEnd = _initialEndTime!;
+		DateTime newStart = _originalStartTime!;
+		DateTime newEnd = _originalEndTime!;
 		
 		// 定义边界：使用当前显示日期
 		final dayStart = DateTime(widget.date.year, widget.date.month, widget.date.day, 0, 0);
 		final dayEnd = DateTime(widget.date.year, widget.date.month, widget.date.day, 23, 59);
 		
+		// 使用原始时间作为计算基准，避免状态突变
 		if (_isResizingTop) {
 			// 调整开始时间（拖动顶部）
-			newStart = _initialStartTime!.add(Duration(minutes: deltaQuarters * 15));
+			newStart = _originalStartTime!.add(Duration(minutes: deltaQuarters * 15));
 			
-			// 检查是否发生了交换（上端被拖到下端下面）
-			if (newStart.isAfter(_initialEndTime!)) {
-				// 发生交换：原来的上端变成新的下端，原来的下端变成新的上端
-				newEnd = newStart;
-				newStart = _initialEndTime!;
-				// 切换拖动模式为底部拖动，并更新初始状态
-				_isResizingTop = false;
-				_initialStartTime = newStart;
-				_initialEndTime = newEnd;
-				// 重新计算当前拖动位置作为新的初始位置
-				_initialResizeY = details.globalPosition.dy;
+			// 如果新开始时间超过原始结束时间，进行平滑的头尾互换
+			if (newStart.isAfter(_originalEndTime!)) {
+				// 计算超出部分，应用到另一端
+				final overflowMinutes = newStart.difference(_originalEndTime!).inMinutes;
+				newStart = _originalEndTime!;
+				newEnd = _originalEndTime!.add(Duration(minutes: overflowMinutes));
 			} else {
 				// 正常拖动，保持结束时间不变
-				newEnd = _initialEndTime!;
+				newEnd = _originalEndTime!;
 			}
 		} else {
 			// 调整结束时间（拖动底部）
-			newEnd = _initialEndTime!.add(Duration(minutes: deltaQuarters * 15));
+			newEnd = _originalEndTime!.add(Duration(minutes: deltaQuarters * 15));
 			
-			// 检查是否发生了交换（下端被拖到上端上面）
-			if (newEnd.isBefore(_initialStartTime!)) {
-				// 发生交换：原来的下端变成新的上端，原来的上端变成新的下端
-				newStart = newEnd;
-				newEnd = _initialStartTime!;
-				// 切换拖动模式为顶部拖动，并更新初始状态
-				_isResizingTop = true;
-				_initialStartTime = newStart;
-				_initialEndTime = newEnd;
-				// 重新计算当前拖动位置作为新的初始位置
-				_initialResizeY = details.globalPosition.dy;
+			// 如果新结束时间早于原始开始时间，进行平滑的头尾互换
+			if (newEnd.isBefore(_originalStartTime!)) {
+				// 计算超出部分，应用到另一端
+				final overflowMinutes = _originalStartTime!.difference(newEnd).inMinutes;
+				newEnd = _originalStartTime!;
+				newStart = _originalStartTime!.subtract(Duration(minutes: overflowMinutes));
 			} else {
 				// 正常拖动，保持开始时间不变
-				newStart = _initialStartTime!;
+				newStart = _originalStartTime!;
 			}
 		}
 		
@@ -1020,63 +1046,69 @@ class _DayViewState extends State<DayView> {
 		}
 		
 		
-		final updatedEvent = CalendarEvent(
-			title: _resizingEvent!.title,
-			allDay: _resizingEvent!.allDay,
-			description: _resizingEvent!.description,
-			color: _resizingEvent!.color,
+		final updatedEvent = _resizingEvent!.copyWith(
 			start: newStart,
 			end: newEnd,
 		);
 		
-		// 使用 onUpdateEvent 回调更新事件
-		if (widget.onUpdateEvent != null) {
-			widget.onUpdateEvent!(_resizingEvent!, updatedEvent);
-		}
-		
+		// 在调整大小过程中只更新本地状态，不触发数据库操作
 		setState(() {
 			_resizingEvent = updatedEvent;
 			_selectedEvent = updatedEvent;
+			_selectedEventId = _getEventId(updatedEvent); // 更新选中活动ID
 		});
+		
+		// 通知父组件选中状态已更新（用于实时更新编辑面板）
+		widget.onSelectEvent?.call(updatedEvent);
 		
 	}
 	
 	// 调整大小结束
 	void _onResizeEnd(DragEndDetails details) {
-		// 确保最终事件状态正确
-		if (_resizingEvent != null) {
+		// 调整大小结束时才进行数据库更新
+		if (_resizingEvent != null && _originalStartTime != null && _originalEndTime != null) {
+			// 使用真正的原始状态创建原始事件用于数据库更新
+			final originalEvent = _resizingEvent!.copyWith(
+				start: _originalStartTime!,
+				end: _originalEndTime!,
+			);
+			
+			var finalEvent = _resizingEvent!;
+			
 			// 最后一次验证事件时间的有效性
-			final event = _resizingEvent!;
-			final duration = event.end.difference(event.start);
+			final duration = finalEvent.end.difference(finalEvent.start);
 			
 			// 如果时长小于15分钟，进行最终修正
 			if (duration.inMinutes < 15) {
-				final correctedEvent = CalendarEvent(
-					title: event.title,
-					allDay: event.allDay,
-					description: event.description,
-					color: event.color,
-					start: event.start,
-					end: event.start.add(const Duration(minutes: 15)),
+				finalEvent = finalEvent.copyWith(
+					end: finalEvent.start.add(const Duration(minutes: 15)),
 				);
-				
+			}
+			
+			// 只有当大小真正改变时才更新数据库
+			if (finalEvent.start != _originalStartTime! || finalEvent.end != _originalEndTime!) {
 				if (widget.onUpdateEvent != null) {
-					widget.onUpdateEvent!(event, correctedEvent);
+					widget.onUpdateEvent!(originalEvent, finalEvent);
 				}
-				
-				setState(() {
-					_selectedEvent = correctedEvent;
-				});
+				// 通知父组件选中状态已更新
+				widget.onSelectEvent?.call(finalEvent);
 			}
 		}
 		
+		// 合并setState调用，避免多次重建
 		setState(() {
+			// 在清除_resizingEvent之前保存最终状态
+			if (_resizingEvent != null) {
+				_selectedEvent = _resizingEvent!;
+				_selectedEventId = _getEventId(_resizingEvent!);
+			}
+			
 			_isResizing = false;
 			_isResizingTop = false;
 			_resizingEvent = null;
 			_initialResizeY = null;
-			_initialStartTime = null;
-			_initialEndTime = null;
+			_originalStartTime = null;
+			_originalEndTime = null;
 		});
 	}
 	
@@ -1102,9 +1134,11 @@ class _DayViewState extends State<DayView> {
 			_isMoving = true;
 			_movingEvent = event;
 			_selectedEvent = event; // 确保事件被选中
+			_selectedEventId = _getEventId(event); // 设置选中活动ID
 			_initialMoveY = details.globalPosition.dy;
 			_initialMoveStartTime = event.start;
 			_initialMoveEndTime = event.end;
+			_hasMoved = false; // 重置移动标记
 		});
 	}
 	
@@ -1116,6 +1150,11 @@ class _DayViewState extends State<DayView> {
 		// 计算从开始位置的总体移动距离
 		final totalDeltaY = details.globalPosition.dy - _initialMoveY!;
 		final deltaQuarters = (totalDeltaY / (_hourRowHeight / 4)).round();
+		
+		// 如果移动距离超过阈值，标记为已移动
+		if (totalDeltaY.abs() > 5) { // Y轴5像素的阈值
+			_hasMoved = true;
+		}
 		
 		
 		// 计算新的开始和结束时间（保持时长不变）
@@ -1146,35 +1185,67 @@ class _DayViewState extends State<DayView> {
 		}
 		
 		
-		final updatedEvent = CalendarEvent(
-			title: _movingEvent!.title,
-			allDay: _movingEvent!.allDay,
-			description: _movingEvent!.description,
-			color: _movingEvent!.color,
+		final updatedEvent = _movingEvent!.copyWith(
 			start: newStart,
 			end: newEnd,
 		);
 		
-		// 使用 onUpdateEvent 回调更新事件
-		if (widget.onUpdateEvent != null) {
-			widget.onUpdateEvent!(_movingEvent!, updatedEvent);
-		}
-		
+		// 在拖拽过程中只更新本地状态，不触发数据库操作
 		setState(() {
 			_movingEvent = updatedEvent;
 			_selectedEvent = updatedEvent;
+			_selectedEventId = _getEventId(updatedEvent); // 更新选中活动ID
 		});
+		
+		// 通知父组件选中状态已更新（用于实时更新编辑面板）
+		widget.onSelectEvent?.call(updatedEvent);
 		
 	}
 	
-	// 移动活动结束
+	// 移动活动结束（统一状态恢复逻辑）
 	void _onEventMoveEnd(DragEndDetails details) {
+		// 移动结束时才进行数据库更新
+		CalendarEvent? finalEvent;
+		
+		if (_movingEvent != null && _initialMoveStartTime != null && _initialMoveEndTime != null) {
+			final originalEvent = _movingEvent!.copyWith(
+				start: _initialMoveStartTime!,
+				end: _initialMoveEndTime!,
+			);
+			
+			// 如果没有实际移动，恢复原始状态
+			if (!_hasMoved) {
+				finalEvent = originalEvent;
+			} else {
+				// 只有当位置真正改变时才更新数据库
+				if (_movingEvent!.start != _initialMoveStartTime! || _movingEvent!.end != _initialMoveEndTime!) {
+					finalEvent = _movingEvent!;
+					
+					if (widget.onUpdateEvent != null) {
+						widget.onUpdateEvent!(originalEvent, _movingEvent!);
+					}
+					// 通知父组件选中状态已更新
+					widget.onSelectEvent?.call(_movingEvent!);
+				} else {
+					finalEvent = _movingEvent!;
+				}
+			}
+		}
+		
+		// 统一的setState调用，确保状态同步
 		setState(() {
+			// 设置最终状态（避免状态不同步问题）
+			if (finalEvent != null) {
+				_selectedEvent = finalEvent;
+				_selectedEventId = _getEventId(finalEvent);
+			}
+			
 			_isMoving = false;
 			_movingEvent = null;
 			_initialMoveY = null;
 			_initialMoveStartTime = null;
 			_initialMoveEndTime = null;
+			_hasMoved = false;
 		});
 	}
 	
