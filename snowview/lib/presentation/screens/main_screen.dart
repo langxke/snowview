@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import 'schedule_screen.dart';
 import 'settings_screen.dart';
-import 'todo_pane.dart';
+import 'tasks/task_list_screen.dart';
 import 'ai_chat_panel.dart';
 
 enum _MainSection { todo, calendar, settings }
@@ -106,7 +106,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildSection(BuildContext context) {
     switch (_section) {
       case _MainSection.todo:
-        return const TodoPane();
+        return const TaskListScreen();
       case _MainSection.calendar:
         return const ScheduleScreen();
       case _MainSection.settings:
