@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'dart:math' as math;
 
 import 'schedule/models.dart';
@@ -8,6 +9,8 @@ import 'schedule/week_view.dart';
 import 'schedule/month_view.dart';
 import 'schedule/event_sidebar.dart';
 import '../../services/calendar_database_service.dart';
+import '../providers/schedule_provider.dart';
+import '../providers/task_list_provider.dart';
 
 class ScheduleScreen extends StatefulWidget {
 	const ScheduleScreen({super.key});
@@ -43,6 +46,25 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		setState(() {
 			_events = _dbService.getAllCalendarEvents();
 		});
+	}
+	
+	// 获取包含任务会话的事件列表
+	List<CalendarEvent> _getAllEvents(BuildContext context) {
+		final scheduleProvider = context.watch<ScheduleProvider>();
+		
+		// 根据当前视图获取对应的事件
+		switch (_view) {
+			case CalendarView.day:
+				return scheduleProvider.getEventsForDate(_selected);
+			case CalendarView.week:
+				final weekStart = _selected.subtract(Duration(days: _selected.weekday - 1));
+				final weekEnd = weekStart.add(const Duration(days: 7));
+				return scheduleProvider.getEventsInRange(weekStart, weekEnd);
+			case CalendarView.month:
+				final monthStart = DateTime(_year, _month, 1);
+				final monthEnd = DateTime(_year, _month + 1, 0);
+				return scheduleProvider.getEventsInRange(monthStart, monthEnd);
+		}
 	}
 
 	@override
@@ -183,11 +205,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
 	// 主区域：根据模式切换
 	Widget _buildMainCalendarArea(BuildContext context) {
+		final allEvents = _getAllEvents(context);  // ✅ 获取包含任务会话的事件列表
+		
 		switch (_view) {
 			case CalendarView.day:
 				return DayView(
 					date: _selected, 
-					events: _events,
+					events: allEvents,
 					onAddEvent: _addEvent,
 					onUpdateEvent: _updateEvent,
 					onDeleteEvent: _deleteEvent,
@@ -197,7 +221,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 			case CalendarView.week:
 				return WeekView(
 					centerDate: _selected, 
-					events: _events,
+					events: allEvents,
 					onAddEvent: _addEvent,
 					onUpdateEvent: _updateEvent,
 					onDeleteEvent: _deleteEvent,
@@ -208,7 +232,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 				return MonthView(
 					year: _year,
 					month: _month,
-					events: _events,
+					events: allEvents,
 					onAddEvent: _openAddEventDialog,
 				);
 		}
@@ -236,41 +260,101 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	Future<void> _addEvent(CalendarEvent event) async {
 		await _dbService.addEventFromCalendarEvent(event);
 		_loadEvents();
+		// 刷新视图
+		if (mounted) {
+			context.read<ScheduleProvider>().refresh();
+		}
 	}
 	
 	// 更新活动
 	Future<void> _updateEvent(CalendarEvent oldEvent, CalendarEvent newEvent) async {
-		final eventId = _dbService.findEventId(oldEvent);
-		if (eventId != null) {
-			await _dbService.updateEventById(eventId, newEvent);
+		// ✅ 使用字段判断类型
+		if (oldEvent.isTaskSession && oldEvent.taskSessionId != null) {
+			// 这是工作会话，更新工作会话
+			final taskProvider = context.read<TaskListProvider>();
 			
-			// 直接更新本地事件列表，避免重新加载导致闪现
-			setState(() {
-				final index = _events.indexWhere((e) => e.id == oldEvent.id);
-				if (index != -1) {
-					_events[index] = newEvent;
+			// 通过 sessionId 找到对应的会话
+			bool updated = false;
+			for (final task in taskProvider.tasks) {
+				final sessions = taskProvider.getTaskSessions(task.id);
+				for (final session in sessions) {
+					if (session.id == oldEvent.taskSessionId) {
+						final updatedSession = session.copyWith(
+							startTime: newEvent.start,
+							endTime: newEvent.end,
+						);
+						await taskProvider.updateWorkSession(updatedSession);
+						updated = true;
+						break;
+					}
 				}
-				// 如果更新的是当前选中的活动，同时更新选中活动引用
-				if (_selectedEvent?.id == oldEvent.id) {
-					_selectedEvent = newEvent;
+				if (updated) break;
+			}
+			
+			// 刷新视图
+			if (mounted) {
+				context.read<ScheduleProvider>().refresh();
+			}
+		} else {
+			// 这是日历事件
+			final eventId = _dbService.findEventId(oldEvent);
+			if (eventId != null) {
+				await _dbService.updateEventById(eventId, newEvent);
+				
+				// 直接更新本地事件列表
+				setState(() {
+					final index = _events.indexWhere((e) => e.id == oldEvent.id);
+					if (index != -1) {
+						_events[index] = newEvent;
+					}
+					if (_selectedEvent?.id == oldEvent.id) {
+						_selectedEvent = newEvent;
+					}
+				});
+				
+				// 刷新视图
+				if (mounted) {
+					context.read<ScheduleProvider>().refresh();
 				}
-			});
+			}
 		}
 	}
 	
 	// 删除活动
 	Future<void> _deleteEvent(CalendarEvent event) async {
 		try {
-			await _dbService.deleteEventByCalendarEvent(event);
-			if (_selectedEvent == event) {
-				_selectedEvent = null;
+			// ✅ 使用字段判断类型
+			if (event.isTaskSession && event.taskSessionId != null) {
+				// 这是工作会话，删除工作会话
+				final taskProvider = context.read<TaskListProvider>();
+				await taskProvider.deleteWorkSession(event.taskSessionId!);
+				
+				if (_selectedEvent == event) {
+					_selectedEvent = null;
+				}
+				
+				// 刷新视图
+				if (mounted) {
+					context.read<ScheduleProvider>().refresh();
+				}
+			} else {
+				// 这是日历事件
+				await _dbService.deleteEventByCalendarEvent(event);
+				if (_selectedEvent == event) {
+					_selectedEvent = null;
+				}
+				_loadEvents();
+				
+				// 刷新视图
+				if (mounted) {
+					context.read<ScheduleProvider>().refresh();
+				}
 			}
-			_loadEvents();
 		} catch (e) {
 			// 如果删除失败，显示错误信息
 			if (mounted) {
 				ScaffoldMessenger.of(context).showSnackBar(
-					SnackBar(content: Text('删除活动失败: $e')),
+					SnackBar(content: Text('删除失败: $e')),
 				);
 			}
 		}

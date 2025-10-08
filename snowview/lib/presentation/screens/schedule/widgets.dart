@@ -406,23 +406,25 @@ class _AddEventDialogState extends State<AddEventDialog> {
 						if (title.trim().isEmpty) return;
 						if (!allDay && (startTime == null || endTime == null)) return;
 						
-						DateTime s = widget.startDate;
-						DateTime e = widget.endDate;
-						if (!allDay) {
-							s = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day, startTime!.hour, startTime!.minute);
-							e = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day, endTime!.hour, endTime!.minute);
-						}
-						
-						final event = CalendarEvent(
-							title: title.trim(),
-							allDay: allDay,
-							description: desc.trim(),
-							color: color,
-							start: s,
-							end: e,
-						);
-						
-						Navigator.pop(context, event);
+					DateTime s = widget.startDate;
+					DateTime e = widget.endDate;
+					if (!allDay) {
+						s = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day, startTime!.hour, startTime!.minute);
+						e = DateTime(widget.endDate.year, widget.endDate.month, widget.endDate.day, endTime!.hour, endTime!.minute);
+					}
+					
+					final event = CalendarEvent(
+						title: title.trim(),
+						allDay: allDay,
+						description: desc.trim(),
+						color: color,
+						start: s,
+						end: e,
+						isTaskSession: false,  // ✅ 新建的都是普通事件
+						taskSessionId: null,
+					);
+					
+					Navigator.pop(context, event);
 					},
 					child: const Text('添加')
 				),
@@ -619,26 +621,28 @@ class _DayViewAddEventDialogState extends State<DayViewAddEventDialog> {
 					onPressed: () {
 						if (title.trim().isEmpty) return;
 						
-						DateTime s = widget.date;
-						DateTime e = widget.date;
-						if (allDay) {
-							s = DateTime(widget.date.year, widget.date.month, widget.date.day);
-							e = DateTime(widget.date.year, widget.date.month, widget.date.day, 23, 59, 59);
-						} else {
-							s = DateTime(widget.date.year, widget.date.month, widget.date.day, startTime.hour, startTime.minute);
-							e = DateTime(widget.date.year, widget.date.month, widget.date.day, endTime.hour, endTime.minute);
-						}
-						
-						final event = CalendarEvent(
-							title: title.trim(),
-							allDay: allDay,
-							description: desc.trim(),
-							color: color,
-							start: s,
-							end: e,
-						);
-						
-						Navigator.pop(context, event);
+					DateTime s = widget.date;
+					DateTime e = widget.date;
+					if (allDay) {
+						s = DateTime(widget.date.year, widget.date.month, widget.date.day);
+						e = DateTime(widget.date.year, widget.date.month, widget.date.day, 23, 59, 59);
+					} else {
+						s = DateTime(widget.date.year, widget.date.month, widget.date.day, startTime.hour, startTime.minute);
+						e = DateTime(widget.date.year, widget.date.month, widget.date.day, endTime.hour, endTime.minute);
+					}
+					
+					final event = CalendarEvent(
+						title: title.trim(),
+						allDay: allDay,
+						description: desc.trim(),
+						color: color,
+						start: s,
+						end: e,
+						isTaskSession: false,  // ✅ 新建的都是普通事件
+						taskSessionId: null,
+					);
+					
+					Navigator.pop(context, event);
 					},
 					child: const Text('添加')
 				),

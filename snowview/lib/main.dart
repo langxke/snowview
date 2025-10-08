@@ -12,7 +12,9 @@ import 'data/models/calendar_event_hive.dart';
 import 'data/models/task_category_hive.dart';
 import 'data/models/checklist_task_hive.dart';
 import 'data/models/subtask_hive.dart';
+import 'data/models/work_session_hive.dart';
 import 'data/repositories/task_list_repository.dart';
+import 'data/repositories/work_session_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,11 +37,18 @@ Future<void> initHive() async {
   Hive.registerAdapter(SubTaskHiveAdapter());
   Hive.registerAdapter(ChecklistTaskHiveAdapter());
   
+  // 注册工作会话适配器
+  Hive.registerAdapter(WorkSessionHiveAdapter());
+  
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
+  await Hive.openBox<WorkSessionHive>('work_sessions');
   
   // 初始化清单任务数据库
   await TaskListRepository.init();
+  
+  // 初始化工作会话数据库
+  await WorkSessionRepository.init();
 }
 
 class MyApp extends StatelessWidget {

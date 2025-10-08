@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 import '../../data/models/task_category_hive.dart';
 import '../../data/models/checklist_task_hive.dart';
 import '../../data/models/subtask_hive.dart';
+import '../../data/models/work_session_hive.dart';
 import '../../data/repositories/task_list_repository.dart';
+import '../../data/repositories/work_session_repository.dart';
 
 /// 清单任务状态管理Provider
 class TaskListProvider extends ChangeNotifier {
   final TaskListRepository _repository;
+  final WorkSessionRepository _sessionRepository = WorkSessionRepository();
   
   List<TaskCategoryHive> _categories = [];
   List<ChecklistTaskHive> _tasks = [];
@@ -293,10 +296,14 @@ class TaskListProvider extends ChangeNotifier {
   
   /// 删除任务
   Future<void> deleteTask(String taskId) async {
+    // 1. 删除关联的所有工作会话（级联删除）
+    await _sessionRepository.deleteSessionsByTaskId(taskId);
+    
+    // 2. 删除任务本身
     await _repository.deleteTask(taskId);
     _tasks = _repository.getAllTasks();
     
-    // 如果删除的是当前选中的任务，关闭详情面板
+    // 3. 如果删除的是当前选中的任务，关闭详情面板
     if (_selectedTaskId == taskId) {
       _selectedTaskId = null;
     }
@@ -350,6 +357,20 @@ class TaskListProvider extends ChangeNotifier {
     final task = _repository.getTaskById(taskId);
     if (task == null) return;
     
+    // 1. 查找关联到此子步骤的会话
+    final relatedSessions = _sessionRepository
+        .getSessionsByTaskId(taskId)
+        .where((s) => s.subTaskId == subTaskId)
+        .toList();
+    
+    // 2. 将会话的子步骤关联改为null（关联到整个任务）
+    for (final session in relatedSessions) {
+      await _sessionRepository.updateSession(
+        session.copyWith(subTaskId: null)
+      );
+    }
+    
+    // 3. 删除子步骤
     final updatedSubTasks = task.subTasks
         .where((st) => st.id != subTaskId)
         .toList();
@@ -359,6 +380,140 @@ class TaskListProvider extends ChangeNotifier {
     await _repository.updateTask(updated);
     _tasks = _repository.getAllTasks();
     notifyListeners();
+  }
+  
+  // ==================== 工作会话管理 ====================
+  
+  /// 创建工作会话
+  Future<void> createWorkSession({
+    required String taskId,
+    String? subTaskId,
+    required DateTime startTime,
+    required DateTime endTime,
+    String? note,
+  }) async {
+    final session = WorkSessionHive(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      taskId: taskId,
+      subTaskId: subTaskId,
+      startTime: startTime,
+      endTime: endTime,
+      status: 'planned',
+      note: note,
+      createdAt: DateTime.now(),
+    );
+    
+    await _sessionRepository.saveSession(session);
+    notifyListeners();
+  }
+  
+  /// 获取任务的所有会话
+  List<WorkSessionHive> getTaskSessions(String taskId) {
+    return _sessionRepository.getSessionsByTaskId(taskId);
+  }
+  
+  /// 获取某天的所有会话
+  List<WorkSessionHive> getSessionsByDate(DateTime date) {
+    return _sessionRepository.getSessionsByDate(date);
+  }
+  
+  /// 更新工作会话
+  Future<void> updateWorkSession(WorkSessionHive session) async {
+    await _sessionRepository.updateSession(session);
+    notifyListeners();
+  }
+  
+  /// 删除工作会话
+  Future<void> deleteWorkSession(String sessionId) async {
+    await _sessionRepository.deleteSession(sessionId);
+    notifyListeners();
+  }
+  
+  // ==================== 会话状态管理 ====================
+  
+  /// 标记会话为已完成
+  Future<void> markSessionAsCompleted(String sessionId) async {
+    final session = _sessionRepository.getSessionById(sessionId);
+    if (session == null) return;
+    
+    final updated = session.copyWith(status: 'completed');
+    
+    await _sessionRepository.updateSession(updated);
+    notifyListeners();
+  }
+  
+  /// 取消会话
+  Future<void> cancelSession(String sessionId) async {
+    final session = _sessionRepository.getSessionById(sessionId);
+    if (session == null) return;
+    
+    final updated = session.copyWith(status: 'cancelled');
+    
+    await _sessionRepository.updateSession(updated);
+    notifyListeners();
+  }
+  
+  // ==================== 与专注功能集成 ====================
+  
+  /// 从工作会话启动专注功能
+  /// 返回创建的专注会话ID（需要与专注功能集成后实现）
+  Future<String> startFocusFromSession(WorkSessionHive session) async {
+    // TODO: 与专注功能集成
+    // 1. 调用专注服务创建专注会话
+    // final focusSessionId = await _focusService.startFocus(
+    //   taskId: session.taskId,
+    //   subTaskId: session.subTaskId,
+    //   plannedDuration: session.plannedDuration,
+    // );
+    
+    // 2. 关联工作会话和专注会话
+    final focusSessionId = 'temp_focus_${DateTime.now().millisecondsSinceEpoch}';
+    final updated = session.copyWith(focusSessionId: focusSessionId);
+    await _sessionRepository.updateSession(updated);
+    
+    notifyListeners();
+    return focusSessionId;
+  }
+  
+  /// 专注会话完成后的回调
+  /// 自动标记关联的工作会话为已完成
+  Future<void> onFocusSessionCompleted(String focusSessionId) async {
+    // 查找关联的工作会话
+    final sessions = _sessionRepository.getAllSessions();
+    final relatedSession = sessions.cast<WorkSessionHive?>().firstWhere(
+      (s) => s?.focusSessionId == focusSessionId,
+      orElse: () => null,
+    );
+    
+    if (relatedSession != null) {
+      // 自动标记工作会话为已完成
+      await markSessionAsCompleted(relatedSession.id);
+    }
+  }
+  
+  /// 从专注会话获取实际时长
+  /// （需要与专注功能集成后实现）
+  int getActualDurationFromFocus(String? focusSessionId) {
+    if (focusSessionId == null) return 0;
+    
+    // TODO: 从专注服务获取实际时长
+    // final focusSession = _focusService.getSessionById(focusSessionId);
+    // return focusSession?.duration ?? 0;
+    
+    // 临时返回0
+    return 0;
+  }
+  
+  // ==================== 工具方法 ====================
+  
+  /// 检查时间冲突
+  bool checkSessionConflict(DateTime start, DateTime end, {String? excludeId}) {
+    return _sessionRepository.hasConflict(start, end, excludeSessionId: excludeId);
+  }
+  
+  /// 获取冲突的会话列表
+  List<WorkSessionHive> getConflictingSessions(DateTime start, DateTime end, {String? excludeId}) {
+    return _sessionRepository.getConflictingSessions(start, end, excludeSessionId: excludeId);
   }
   
   // ==================== 日历集成方法 ====================

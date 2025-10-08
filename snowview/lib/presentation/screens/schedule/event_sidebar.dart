@@ -304,14 +304,8 @@ class EventSidebar extends StatelessWidget {
             Colors.blueGrey,
           ].map((color) => GestureDetector(
             onTap: () {
-              final updatedEvent = CalendarEvent(
-                title: event.title,
-                allDay: event.allDay,
-                description: event.description,
-                color: color,
-                start: event.start,
-                end: event.end,
-              );
+              // ✅ 使用 copyWith 保持所有字段
+              final updatedEvent = event.copyWith(color: color);
               onEditEvent?.call(updatedEvent);
               Navigator.of(context).pop();
             },
@@ -390,14 +384,8 @@ class _EditableTitleState extends State<_EditableTitle> {
 
     // 与当前活动的标题比较，而不是初始标题
     if (_controller.text.trim() != widget.event.title) {
-      final updatedEvent = CalendarEvent(
-        title: _controller.text.trim(),
-        allDay: widget.event.allDay,
-        description: widget.event.description,
-        color: widget.event.color,
-        start: widget.event.start,
-        end: widget.event.end,
-      );
+      // ✅ 使用 copyWith 保持所有字段
+      final updatedEvent = widget.event.copyWith(title: _controller.text.trim());
       widget.onUpdateEvent?.call(updatedEvent);
     }
 
@@ -489,14 +477,8 @@ class _EditableDescriptionState extends State<_EditableDescription> {
     
     // 与当前活动的描述比较，而不是初始描述
     if (newDescription != widget.event.description) {
-      final updatedEvent = CalendarEvent(
-        title: widget.event.title,
-        allDay: widget.event.allDay,
-        description: newDescription,
-        color: widget.event.color,
-        start: widget.event.start,
-        end: widget.event.end,
-      );
+      // ✅ 使用 copyWith 保持所有字段
+      final updatedEvent = widget.event.copyWith(description: newDescription);
       widget.onUpdateEvent?.call(updatedEvent);
     }
 

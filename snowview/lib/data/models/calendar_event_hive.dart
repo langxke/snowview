@@ -75,12 +75,15 @@ class CalendarEventHive extends HiveObject {
   // 转换为现有的CalendarEvent类型（用于兼容现有代码）
   schedule.CalendarEvent toCalendarEvent() {
     return schedule.CalendarEvent(
+      id: id,  // ✅ 保持相同的ID
       title: title,
       allDay: allDay,
       description: description,
       color: color,
       start: start,
       end: end,
+      isTaskSession: false,  // ✅ 标记为日历事件
+      taskSessionId: null,   // ✅ 不是工作会话
     );
   }
   

@@ -45,14 +45,8 @@ class _EventEditableTextFieldState extends State<EventEditableTextField> {
   /// 更新事件标题
   void _updateEvent(String newTitle) {
     if (newTitle.trim().isNotEmpty && newTitle.trim() != _currentEvent.title) {
-      final updatedEvent = CalendarEvent(
-        title: newTitle.trim(),
-        allDay: _currentEvent.allDay,
-        description: _currentEvent.description,
-        color: _currentEvent.color,
-        start: _currentEvent.start,
-        end: _currentEvent.end,
-      );
+      // ✅ 使用 copyWith 保持所有字段
+      final updatedEvent = _currentEvent.copyWith(title: newTitle.trim());
       
       if (widget.onUpdateEvent != null) {
         widget.onUpdateEvent!(_currentEvent, updatedEvent);

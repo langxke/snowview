@@ -93,6 +93,8 @@ class EventUtils {
         color: Colors.blue, // 默认颜色
         start: startTime,
         end: endTime,
+        isTaskSession: false,  // ✅ 从剪贴板粘贴的是普通事件
+        taskSessionId: null,
       );
       
       onAddEvent(newEvent);
@@ -117,13 +119,17 @@ class EventUtils {
     required Function(CalendarEvent) onAddEvent,
     int hourOffset = 1,
   }) {
+    // ✅ 复制事件时不能保留 ID 和工作会话标识（应该创建新事件）
     final newEvent = CalendarEvent(
+      // id 会自动生成新的
       title: '${event.title} (副本)',
       allDay: event.allDay,
       description: event.description,
       color: event.color,
       start: event.start.add(Duration(hours: hourOffset)),
       end: event.end.add(Duration(hours: hourOffset)),
+      isTaskSession: false,  // 副本总是普通事件
+      taskSessionId: null,
     );
     
     onAddEvent(newEvent);
@@ -148,14 +154,8 @@ class EventUtils {
       return false;
     }
     
-    final updatedEvent = CalendarEvent(
-      title: originalEvent.title,
-      allDay: originalEvent.allDay,
-      description: originalEvent.description,
-      color: newColor,
-      start: originalEvent.start,
-      end: originalEvent.end,
-    );
+    // ✅ 使用 copyWith 保持所有字段
+    final updatedEvent = originalEvent.copyWith(color: newColor);
     
     onUpdateEvent(originalEvent, updatedEvent);
     return true;

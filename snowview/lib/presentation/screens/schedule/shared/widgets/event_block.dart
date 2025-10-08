@@ -66,9 +66,10 @@ class CalendarEventBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 判断是否显示调整手柄（需要选中且高度足够）
+    // ✅ 降低阈值：只要高度大于一个手柄即可（原来是2倍）
     final bool canShowHandles = showResizeHandles && 
                                  isSelected && 
-                                 height > resizeHandleHeight * 2;
+                                 height > resizeHandleHeight;
 
     return Positioned(
       left: leftOffset,

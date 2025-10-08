@@ -423,7 +423,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 						width: columnWidth - 2,
 						topPosition: startY,
 						resizeHandleHeight: CalendarConstants.resizeHandleHeightWeek,
-						showResizeHandles: height > CalendarConstants.resizeHandleHeightWeek * 1.5,
+						showResizeHandles: true,  // ✅ 总是显示手柄（与日视图一致）
 						onTopResizeStart: (details) => onResizeStartImpl(event, true, details),
 						onTopResizeUpdate: onResizeUpdateImpl,
 						onTopResizeEnd: onResizeEndImpl,
