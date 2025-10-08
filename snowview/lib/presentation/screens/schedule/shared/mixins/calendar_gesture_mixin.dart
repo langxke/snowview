@@ -85,7 +85,7 @@ mixin CalendarGestureMixin<T extends StatefulWidget> on State<T>, CalendarStateM
 	}
 	
 	/// 获取当前光标样式
-	SystemMouseCursor getCurrentCursor() {
+	SystemMouseCursor getCurrentCursor({DateTime? day}) {
 		// 如果正在调整大小，保持上下箭头样式
 		if (isResizing) {
 			return SystemMouseCursors.resizeUpDown;
@@ -94,7 +94,7 @@ mixin CalendarGestureMixin<T extends StatefulWidget> on State<T>, CalendarStateM
 		if (currentHoverY == null) return SystemMouseCursors.basic;
 		
 		// 检查是否在调整手柄区域
-		final event = getEventAtPosition(currentHoverY!);
+		final event = getEventAtPosition(currentHoverY!, day: day);
 		if (event != null && selectedEvent == event) {
 			final eventStartMinutes = event.start.hour * 60 + event.start.minute;
 			final eventStartY = (eventStartMinutes / 15) * (CalendarConstants.hourRowHeight / 4);

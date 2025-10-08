@@ -451,7 +451,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 				top: 0,
 				height: 24 * CalendarConstants.hourRowHeight,
 				child: MouseRegion(
-					cursor: getCurrentCursor(),
+					cursor: getCurrentCursor(day: days[dayIndex]),
 					onHover: (event) => onHoverImpl(event, dayIndex: dayIndex),
 					child: GestureDetector(
 						behavior: HitTestBehavior.translucent,
