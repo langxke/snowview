@@ -11,6 +11,7 @@ class TaskItem extends StatelessWidget {
   final bool isCompleted;
   final VoidCallback onTap;
   final VoidCallback onToggleCompletion;
+  final VoidCallback? onStartFocus;  // 开始专注回调
 
   const TaskItem({
     super.key,
@@ -20,6 +21,7 @@ class TaskItem extends StatelessWidget {
     required this.isCompleted,
     required this.onTap,
     required this.onToggleCompletion,
+    this.onStartFocus,
   });
 
   @override
@@ -116,6 +118,19 @@ class TaskItem extends StatelessWidget {
                 if (task.dueDate != null) ...[
                   const SizedBox(width: 8),
                   _buildDueDateChip(context, task.dueDate!),
+                ],
+                
+                // 专注按钮（未完成任务才显示）
+                if (!isCompleted && onStartFocus != null) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.timer_outlined, size: 18),
+                    tooltip: '开始专注',
+                    onPressed: onStartFocus,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                    iconSize: 18,
+                  ),
                 ],
               ],
             ),

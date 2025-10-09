@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../../../../data/models/checklist_task_hive.dart';
 import '../../../../data/models/task_category_hive.dart';
 import '../../../providers/task_list_provider.dart';
+import '../../../providers/focus_provider.dart';
+import '../../../providers/navigation_provider.dart';
 import 'task_item.dart';
 import 'task_quick_add_input.dart';
 import 'completed_tasks_section.dart';
@@ -161,6 +163,7 @@ class TaskListPanel extends StatelessWidget {
               isCompleted: false,
               onTap: () => provider.selectTask(task.id),
               onToggleCompletion: () => provider.toggleTaskCompletion(task.id),
+              onStartFocus: () => _startFocusForTask(context, task.id),
             );
           }),
         ],
@@ -193,5 +196,141 @@ class TaskListPanel extends StatelessWidget {
       title: title,
       categoryId: categoryId,
     );
+  }
+
+  /// 开始任务专注
+  Future<void> _startFocusForTask(BuildContext context, String taskId) async {
+    final focusProvider = context.read<FocusProvider>();
+    
+    // 检查是否已有活动会话
+    if (focusProvider.isActive) {
+      await _handleFocusConflict(context, focusProvider, taskId: taskId);
+      return;
+    }
+    
+    // 直接开始专注
+    try {
+      await focusProvider.startPomodoro(taskId: taskId);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已开始专注，祝您高效工作！'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('启动失败：${e.toString()}'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 处理专注会话冲突
+  Future<void> _handleFocusConflict(
+    BuildContext context,
+    FocusProvider focusProvider, {
+    String? taskId,
+  }) async {
+    // 显示友好的提示对话框
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          Icons.timer,
+          color: Theme.of(context).colorScheme.primary,
+          size: 48,
+        ),
+        title: const Text('当前有专注进行中'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '您已有一个专注会话正在进行中：',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    focusProvider.isPaused ? Icons.pause_circle : Icons.timer,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '剩余时间：${focusProvider.formattedTime}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).pop('view_current'),
+            icon: const Icon(Icons.visibility_outlined),
+            label: const Text('查看当前专注'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pop('cancel_and_start'),
+            icon: const Icon(Icons.refresh),
+            label: const Text('开始新专注'),
+          ),
+        ],
+      ),
+    );
+
+    if (!context.mounted) return;
+
+    if (result == 'view_current') {
+      // 切换到专注页面（就像用户点击导航栏一样）
+      context.read<NavigationProvider>().navigateToFocus();
+    } else if (result == 'cancel_and_start') {
+      // 取消当前会话并开始新的
+      await focusProvider.cancelCurrentSession();
+      
+      try {
+        await focusProvider.startPomodoro(taskId: taskId);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('已开始新的专注会话'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('启动失败：${e.toString()}'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+        }
+      }
+    }
   }
 }

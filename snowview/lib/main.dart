@@ -7,14 +7,18 @@ import 'presentation/providers/theme_provider.dart';
 import 'presentation/providers/schedule_provider.dart';
 import 'presentation/providers/focus_provider.dart';
 import 'presentation/providers/task_list_provider.dart';
+import 'presentation/providers/navigation_provider.dart';
 import 'presentation/screens/main_screen.dart';
 import 'data/models/calendar_event_hive.dart';
 import 'data/models/task_category_hive.dart';
 import 'data/models/checklist_task_hive.dart';
 import 'data/models/subtask_hive.dart';
 import 'data/models/work_session_hive.dart';
+import 'data/models/focus_session_hive.dart';
+import 'data/models/focus_daily_stats_hive.dart';
 import 'data/repositories/task_list_repository.dart';
 import 'data/repositories/work_session_repository.dart';
+import 'data/repositories/focus_session_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -40,6 +44,10 @@ Future<void> initHive() async {
   // 注册工作会话适配器
   Hive.registerAdapter(WorkSessionHiveAdapter());
   
+  // 注册专注会话适配器
+  Hive.registerAdapter(FocusSessionHiveAdapter());
+  Hive.registerAdapter(FocusDailyStatsHiveAdapter());
+  
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
   await Hive.openBox<WorkSessionHive>('work_sessions');
@@ -49,6 +57,9 @@ Future<void> initHive() async {
   
   // 初始化工作会话数据库
   await WorkSessionRepository.init();
+  
+  // 初始化专注会话数据库
+  await FocusSessionRepository.init();
 }
 
 class MyApp extends StatelessWidget {
@@ -58,10 +69,13 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => TaskProvider()),
         ChangeNotifierProvider(create: (_) => ScheduleProvider()),
-        ChangeNotifierProvider(create: (_) => FocusProvider()),
+        ChangeNotifierProvider(
+          create: (_) => FocusProvider(FocusSessionRepository()),
+        ),
         ChangeNotifierProvider(
           create: (_) => TaskListProvider(TaskListRepository()),
         ),

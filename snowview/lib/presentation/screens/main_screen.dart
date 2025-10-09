@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
+import '../providers/focus_provider.dart';
+import '../providers/navigation_provider.dart';
 import 'schedule_screen.dart';
 import 'settings_screen.dart';
 import 'tasks/task_list_screen.dart';
+import 'focus/focus_screen.dart';
 import 'ai_chat_panel.dart';
 
-enum _MainSection { todo, calendar, settings }
+enum _MainSection { todo, calendar, focus, settings }
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -16,8 +19,6 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  // 左侧侧边栏当前选中项
-  _MainSection _section = _MainSection.todo;
 
   // 右侧 AI 面板是否显示
   bool _showAI = true;
@@ -31,6 +32,8 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final navigationProvider = context.watch<NavigationProvider>();
+    
     return Scaffold(
       body: Row(
         children: [
@@ -40,11 +43,9 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 NavigationRail(
                   minWidth: 56,
-                  selectedIndex: _section.index,
+                  selectedIndex: navigationProvider.currentIndex,
                   onDestinationSelected: (i) {
-                    setState(() {
-                      _section = _MainSection.values[i];
-                    });
+                    navigationProvider.navigateTo(i);
                   },
                   labelType: NavigationRailLabelType.all,
                   destinations: const [
@@ -57,6 +58,11 @@ class _MainScreenState extends State<MainScreen> {
                       icon: Icon(Icons.calendar_today_outlined),
                       selectedIcon: Icon(Icons.calendar_today),
                       label: Text('日历'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.timer_outlined),
+                      selectedIcon: Icon(Icons.timer),
+                      label: Text('专注'),
                     ),
                     NavigationRailDestination(
                       icon: Icon(Icons.settings_outlined),
@@ -104,14 +110,84 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildSection(BuildContext context) {
-    switch (_section) {
-      case _MainSection.todo:
-        return const TaskListScreen();
-      case _MainSection.calendar:
-        return const ScheduleScreen();
-      case _MainSection.settings:
-        return const SettingsScreen();
+    final navigationProvider = context.watch<NavigationProvider>();
+    final currentSection = _MainSection.values[navigationProvider.currentIndex];
+    
+    final sectionWidget = switch (currentSection) {
+      _MainSection.todo => const TaskListScreen(),
+      _MainSection.calendar => const ScheduleScreen(),
+      _MainSection.focus => const FocusScreen(),
+      _MainSection.settings => const SettingsScreen(),
+    };
+    
+    // 如果不在专注页面，且有活动会话，显示顶部状态条
+    if (currentSection != _MainSection.focus) {
+      return Consumer<FocusProvider>(
+        builder: (context, focusProvider, child) {
+          if (focusProvider.isActive) {
+            return Column(
+              children: [
+                _buildFocusStatusBar(context, focusProvider),
+                Expanded(child: sectionWidget),
+              ],
+            );
+          }
+          return sectionWidget;
+        },
+      );
     }
+    
+    return sectionWidget;
+  }
+  
+  /// 构建专注状态条
+  Widget _buildFocusStatusBar(BuildContext context, FocusProvider provider) {
+    final theme = Theme.of(context);
+    final navigationProvider = context.read<NavigationProvider>();
+    
+    return Material(
+      color: theme.colorScheme.primaryContainer,
+      child: InkWell(
+        onTap: () {
+          navigationProvider.navigateToFocus();
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                provider.isPaused ? Icons.pause_circle : Icons.timer,
+                size: 20,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                provider.isPaused ? '专注已暂停' : '专注进行中',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                provider.formattedTime,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onPrimaryContainer,
+                  fontFeatures: [const FontFeature.tabularFigures()],
+                ),
+              ),
+              const Spacer(),
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 16,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildMainArea(BuildContext context) {
