@@ -8,6 +8,7 @@ import 'presentation/providers/schedule_provider.dart';
 import 'presentation/providers/focus_provider.dart';
 import 'presentation/providers/task_list_provider.dart';
 import 'presentation/providers/navigation_provider.dart';
+import 'presentation/providers/journal_provider.dart';
 import 'presentation/screens/main_screen.dart';
 import 'data/models/calendar_event_hive.dart';
 import 'data/models/task_category_hive.dart';
@@ -16,9 +17,13 @@ import 'data/models/subtask_hive.dart';
 import 'data/models/work_session_hive.dart';
 import 'data/models/focus_session_hive.dart';
 import 'data/models/focus_daily_stats_hive.dart';
+import 'data/models/journal_entry_hive.dart';
+import 'data/models/journal_category_hive.dart';
 import 'data/repositories/task_list_repository.dart';
 import 'data/repositories/work_session_repository.dart';
 import 'data/repositories/focus_session_repository.dart';
+import 'data/repositories/journal_repository.dart';
+import 'data/repositories/journal_category_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +53,10 @@ Future<void> initHive() async {
   Hive.registerAdapter(FocusSessionHiveAdapter());
   Hive.registerAdapter(FocusDailyStatsHiveAdapter());
   
+  // 注册记录条目适配器
+  Hive.registerAdapter(JournalEntryHiveAdapter());
+  Hive.registerAdapter(JournalCategoryHiveAdapter());
+  
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
   await Hive.openBox<WorkSessionHive>('work_sessions');
@@ -60,6 +69,10 @@ Future<void> initHive() async {
   
   // 初始化专注会话数据库
   await FocusSessionRepository.init();
+  
+  // 初始化记录数据库
+  await JournalCategoryRepository.init();
+  await JournalRepository.init();
 }
 
 class MyApp extends StatelessWidget {
@@ -78,6 +91,9 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(
           create: (_) => TaskListProvider(TaskListRepository()),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => JournalProvider(JournalRepository()),
         ),
       ],
       child: Consumer<ThemeProvider>(
