@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/focus_sound_service.dart';
+import '../../data/repositories/ai_config_repository.dart';
+import '../../data/models/ai_config_hive.dart';
+import '../../services/ai_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -18,16 +21,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _enableSound = false;
   
   final FocusSoundService _soundService = FocusSoundService();
+  
+  // AI配置设置
+  final AIConfigRepository _aiConfigRepo = AIConfigRepository();
+  final TextEditingController _apiKeyController = TextEditingController();
+  final TextEditingController _baseUrlController = TextEditingController();
+  final TextEditingController _modelController = TextEditingController(text: 'gpt-3.5-turbo');
+  bool _obscureApiKey = true;
+  double _temperature = 0.7;
+  int _maxTokens = 2000;
+  bool _enableTools = true;
+  bool _isTestingConnection = false;
+  bool _hasValidConfig = false;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _loadAIConfig();
   }
   
   @override
   void dispose() {
     _soundService.dispose();
+    _apiKeyController.dispose();
+    _baseUrlController.dispose();
+    _modelController.dispose();
     super.dispose();
   }
 
@@ -91,6 +110,231 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  // ==================== AI配置相关方法 ====================
+
+  /// 加载AI配置
+  Future<void> _loadAIConfig() async {
+    final config = _aiConfigRepo.getConfig();
+    if (config != null) {
+      setState(() {
+        _apiKeyController.text = config.apiKey;
+        _baseUrlController.text = config.baseUrl ?? '';
+        _modelController.text = config.model;
+        _temperature = config.temperature;
+        _maxTokens = config.maxTokens;
+        _enableTools = config.enableTools;
+        _hasValidConfig = config.isValid;
+      });
+    }
+  }
+
+  /// 保存AI配置（不测试连接）
+  Future<void> _saveAIConfig() async {
+    // 基本验证
+    if (_apiKeyController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ 请先输入API Key'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (_modelController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ 请先输入模型名称'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      final config = AIConfigHive(
+        provider: 'openai',
+        apiKey: _apiKeyController.text.trim(),
+        baseUrl: _baseUrlController.text.trim().isEmpty 
+            ? null 
+            : _baseUrlController.text.trim(),
+        model: _modelController.text.trim(),
+        temperature: _temperature,
+        maxTokens: _maxTokens,
+        enableTools: _enableTools,
+        createdAt: _aiConfigRepo.getConfig()?.createdAt ?? DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      // 验证配置格式
+      if (!config.isValid) {
+        if (mounted) {
+          String errorMsg = '配置格式错误';
+          if (config.baseUrl != null && config.baseUrl!.isNotEmpty) {
+            final url = config.baseUrl!.trim();
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+              errorMsg = 'BaseURL 格式错误：必须以 http:// 或 https:// 开头';
+            }
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ $errorMsg'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      await _aiConfigRepo.saveConfig(config);
+      
+      // 注意：保存成功不代表配置有效（需要测试连接才能确认）
+      setState(() {
+        _hasValidConfig = false; // 保存后需要测试连接才能确认有效性
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ 配置已保存，请点击"测试连接"验证配置'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('保存失败：${e.toString()}'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 测试AI连接
+  Future<void> _testAIConnection() async {
+    if (_apiKeyController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ 请先输入API Key'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (_modelController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ 请先输入模型名称'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isTestingConnection = true;
+    });
+
+    // 双层保护：确保任何异常都被捕获
+    try {
+      // 先创建临时配置进行验证（不保存到数据库）
+      final tempConfig = AIConfigHive(
+        provider: 'openai',
+        apiKey: _apiKeyController.text.trim(),
+        baseUrl: _baseUrlController.text.trim().isEmpty 
+            ? null 
+            : _baseUrlController.text.trim().replaceAll(RegExp(r'/+$'), ''), // 移除末尾的斜杠
+        model: _modelController.text.trim(),
+        temperature: _temperature,
+        maxTokens: _maxTokens,
+        enableTools: _enableTools,
+        createdAt: _aiConfigRepo.getConfig()?.createdAt ?? DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      // 验证配置格式
+      if (!tempConfig.isValid) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('❌ 配置格式错误，请检查输入'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      // 临时保存配置以便测试
+      await _aiConfigRepo.saveConfig(tempConfig);
+
+      // 使用AIService进行实际测试（带超时保护）
+      final aiService = AIService(_aiConfigRepo);
+      
+      final (isConnected, errorMessage) = await aiService.testConnection()
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () => (false, '连接超时（30秒）\n请检查网络或BaseURL'),
+          );
+
+      if (mounted) {
+        if (isConnected) {
+          // 测试成功，更新本地状态
+          setState(() {
+            _hasValidConfig = true;
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('✅ 连接测试成功！配置已保存'),
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        } else {
+          // 测试失败，不保存配置（或者删除刚才的临时保存）
+          setState(() {
+            _hasValidConfig = false;
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ ${errorMessage ?? "连接失败"}'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _hasValidConfig = false;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ 测试失败：${e.toString()}'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTestingConnection = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -101,10 +345,262 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          _buildAIConfigSettings(context),
+          const SizedBox(height: 24),
           _buildFocusSettings(context),
           const SizedBox(height: 24),
           _buildAboutSection(context),
         ],
+      ),
+    );
+  }
+
+  /// AI配置设置
+  Widget _buildAIConfigSettings(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 标题
+            Row(
+              children: [
+                Icon(Icons.smart_toy, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'AI助手配置',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '配置AI助手以使用智能对话功能',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 20),
+            
+            // API Key输入框
+            TextField(
+              controller: _apiKeyController,
+              obscureText: _obscureApiKey,
+              decoration: InputDecoration(
+                labelText: 'API Key *',
+                hintText: '输入您的OpenAI API Key',
+                prefixIcon: const Icon(Icons.key),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureApiKey ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscureApiKey = !_obscureApiKey;
+                    });
+                  },
+                ),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            
+            // Base URL输入框
+            TextField(
+              controller: _baseUrlController,
+              decoration: const InputDecoration(
+                labelText: 'Base URL（可选）',
+                hintText: 'https://api.openai.com/v1/chat/completions',
+                helperText: '填写完整的API端点地址，不会自动追加路径',
+                prefixIcon: Icon(Icons.link),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            
+            // 模型选择
+            TextField(
+              controller: _modelController,
+              decoration: const InputDecoration(
+                labelText: '模型',
+                hintText: '例如：gpt-3.5-turbo, gpt-4, gpt-4o, deepseek-chat 等',
+                prefixIcon: Icon(Icons.psychology),
+                border: OutlineInputBorder(),
+                helperText: '输入您的模型名称，支持所有兼容OpenAI API的模型',
+              ),
+            ),
+            
+            const Divider(height: 32),
+            
+            // 高级设置标题
+            Text(
+              '高级设置',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            
+            // Temperature滑块
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Temperature（温度）'),
+                    Text(
+                      _temperature.toStringAsFixed(1),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '控制回复的随机性。值越高越有创造性',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Slider(
+                  value: _temperature,
+                  min: 0.0,
+                  max: 2.0,
+                  divisions: 20,
+                  label: _temperature.toStringAsFixed(1),
+                  onChanged: (value) {
+                    setState(() {
+                      _temperature = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
+            // Max Tokens滑块
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Max Tokens（最大长度）'),
+                    Text(
+                      _maxTokens.toString(),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'AI回复的最大长度限制',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Slider(
+                  value: _maxTokens.toDouble(),
+                  min: 500,
+                  max: 4000,
+                  divisions: 14,
+                  label: _maxTokens.toString(),
+                  onChanged: (value) {
+                    setState(() {
+                      _maxTokens = value.round();
+                    });
+                  },
+                ),
+              ],
+            ),
+            
+            // 启用工具调用开关
+            SwitchListTile(
+              title: const Text('启用工具调用'),
+              subtitle: const Text('允许AI直接操作任务、日程等功能'),
+              value: _enableTools,
+              onChanged: (value) {
+                setState(() {
+                  _enableTools = value;
+                });
+              },
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // 配置状态指示
+            if (_hasValidConfig)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      '配置有效',
+                      style: TextStyle(
+                        color: Colors.green.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            
+            const SizedBox(height: 16),
+            
+            // 操作按钮
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isTestingConnection ? null : _testAIConnection,
+                    icon: _isTestingConnection
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.wifi_tethering),
+                    label: Text(_isTestingConnection ? '测试中...' : '测试连接'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _saveAIConfig,
+                    icon: const Icon(Icons.save),
+                    label: const Text('保存配置'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

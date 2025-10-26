@@ -61,6 +61,9 @@ dependencies:
   # 桌面集成
   window_manager: ^0.3.9
   flutter_markdown: ^0.7.7+1
+  
+  # 日期格式化
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

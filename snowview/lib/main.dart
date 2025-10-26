@@ -19,11 +19,21 @@ import 'data/models/focus_session_hive.dart';
 import 'data/models/focus_daily_stats_hive.dart';
 import 'data/models/journal_entry_hive.dart';
 import 'data/models/journal_category_hive.dart';
+import 'data/models/ai_config_hive.dart';
+import 'data/models/chat_message_hive.dart';
+import 'data/models/chat_session_hive.dart';
 import 'data/repositories/task_list_repository.dart';
 import 'data/repositories/work_session_repository.dart';
 import 'data/repositories/focus_session_repository.dart';
 import 'data/repositories/journal_repository.dart';
 import 'data/repositories/journal_category_repository.dart';
+import 'data/repositories/ai_config_repository.dart';
+import 'data/repositories/chat_history_repository.dart';
+import 'data/repositories/chat_session_repository.dart';
+import 'services/ai_service.dart';
+import 'services/ai_tool_executor.dart';
+import 'services/ai_context_builder.dart';
+import 'presentation/providers/ai_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,6 +67,11 @@ Future<void> initHive() async {
   Hive.registerAdapter(JournalEntryHiveAdapter());
   Hive.registerAdapter(JournalCategoryHiveAdapter());
   
+  // 注册AI配置适配器
+  Hive.registerAdapter(AIConfigHiveAdapter());
+  Hive.registerAdapter(ChatMessageHiveAdapter());
+  Hive.registerAdapter(ChatSessionHiveAdapter());
+  
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
   await Hive.openBox<WorkSessionHive>('work_sessions');
@@ -73,6 +88,11 @@ Future<void> initHive() async {
   // 初始化记录数据库
   await JournalCategoryRepository.init();
   await JournalRepository.init();
+  
+  // 初始化AI配置数据库
+  await AIConfigRepository.init();
+  await ChatHistoryRepository.init();
+  await ChatSessionRepository.init();
 }
 
 class MyApp extends StatelessWidget {
@@ -94,6 +114,68 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(
           create: (_) => JournalProvider(JournalRepository()),
+        ),
+        // AI Provider - 需要依赖其他 providers
+        ChangeNotifierProxyProvider4<TaskListProvider, ScheduleProvider,
+            FocusProvider, JournalProvider, AIProvider>(
+          create: (context) {
+            // ✅ 创建工具执行器并注册所有工具
+            final toolExecutor = AIToolExecutor(
+              taskProvider: context.read<TaskListProvider>(),
+              scheduleProvider: context.read<ScheduleProvider>(),
+              focusProvider: context.read<FocusProvider>(),
+              journalProvider: context.read<JournalProvider>(),
+              taskRepository: TaskListRepository(),
+            );
+            toolExecutor.registerAllExecutors();
+            
+            return AIProvider(
+              aiService: AIService(AIConfigRepository()),
+              toolExecutor: toolExecutor,
+              contextBuilder: AIContextBuilder(
+                taskProvider: context.read<TaskListProvider>(),
+                scheduleProvider: context.read<ScheduleProvider>(),
+                focusProvider: context.read<FocusProvider>(),
+                journalProvider: context.read<JournalProvider>(),
+              ),
+              historyRepo: ChatHistoryRepository(),
+              sessionRepo: ChatSessionRepository(),
+              configRepo: AIConfigRepository(),
+            );
+          },
+          update: (context, taskProvider, scheduleProvider, focusProvider,
+              journalProvider, previous) {
+            // ⚠️ 重要：重用现有的 AIProvider，避免在操作进行时被 dispose
+            // 只有在 previous 为 null 时（首次创建）才创建新实例
+            if (previous != null) {
+              return previous;
+            }
+            
+            // 首次创建 AIProvider
+            // ✅ 创建工具执行器并注册所有工具
+            final toolExecutor = AIToolExecutor(
+              taskProvider: taskProvider,
+              scheduleProvider: scheduleProvider,
+              focusProvider: focusProvider,
+              journalProvider: journalProvider,
+              taskRepository: TaskListRepository(),
+            );
+            toolExecutor.registerAllExecutors();
+            
+            return AIProvider(
+              aiService: AIService(AIConfigRepository()),
+              toolExecutor: toolExecutor,
+              contextBuilder: AIContextBuilder(
+                taskProvider: taskProvider,
+                scheduleProvider: scheduleProvider,
+                focusProvider: focusProvider,
+                journalProvider: journalProvider,
+              ),
+              historyRepo: ChatHistoryRepository(),
+              sessionRepo: ChatSessionRepository(),
+              configRepo: AIConfigRepository(),
+            );
+          },
         ),
       ],
       child: Consumer<ThemeProvider>(
