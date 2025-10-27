@@ -1,10 +1,11 @@
 {
+  "dart.exceptionPauseMode": "None",
   "dart.debugExternalPackageLibraries": false,
   "dart.debugSdkLibraries": false,
   "dart.evaluateGettersInDebugViews": false,
   "dart.evaluateToStringInDebugViews": false,
   "dart.vmAdditionalArgs": [
     "--pause-isolates-on-exit=false"
-  ]
+  ],
 }
 

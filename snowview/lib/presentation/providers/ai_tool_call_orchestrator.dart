@@ -340,7 +340,8 @@ class AIToolCallOrchestrator {
     List<OpenAIToolCall> toolCalls,
     String sessionId,
   ) {
-    final planSummary = _generateExecutionPlan(toolCalls);
+    // 不生成执行计划文字，工具调用组件本身已经显示了信息
+    // content 为空字符串，只显示工具调用组件
     
     final toolCallsJson = toolCalls.map((tc) {
       return jsonEncode({
@@ -355,62 +356,10 @@ class AIToolCallOrchestrator {
     
     return ChatMessageHive.assistant(
       id: const Uuid().v4(),
-      content: planSummary,
+      content: '', // 空字符串，不显示文字内容
       toolCalls: toolCallsJson,
       sessionId: sessionId,
     );
-  }
-  
-  /// 生成执行计划摘要
-  String _generateExecutionPlan(List<OpenAIToolCall> toolCalls) {
-    if (toolCalls.isEmpty) return '正在执行操作...';
-    
-    final buffer = StringBuffer();
-    buffer.writeln('📋 **执行计划**（共 ${toolCalls.length} 项操作）\n');
-    
-    // 统计工具类型
-    final toolStats = <String, int>{};
-    for (final tc in toolCalls) {
-      toolStats[tc.function.name] = (toolStats[tc.function.name] ?? 0) + 1;
-    }
-    
-    // 工具名称映射
-    const toolNameMap = {
-      'create_task': '创建任务',
-      'update_task': '更新任务',
-      'delete_task': '删除任务',
-      'complete_task': '完成任务',
-      'add_subtask': '添加子步骤',
-      'create_calendar_event': '创建日程',
-      'update_calendar_event': '更新日程',
-      'delete_calendar_event': '删除日程',
-      'create_journal_entry': '创建记录',
-      'start_focus_session': '启动专注',
-      'query_tasks': '查询任务',
-      'query_events': '查询日程',
-      'query_journals': '查询记录',
-      'find_free_time': '查询空闲时间',
-      'get_focus_stats': '查询专注统计',
-    };
-    
-    toolStats.forEach((name, count) {
-      final displayName = toolNameMap[name] ?? name;
-      buffer.writeln('• $displayName × $count');
-    });
-    
-    // 如果操作数量不多，显示详细信息
-    if (toolCalls.length <= 10) {
-      buffer.writeln('\n**操作详情**:');
-      for (int i = 0; i < toolCalls.length && i < 10; i++) {
-        final tc = toolCalls[i];
-        final toolName = toolNameMap[tc.function.name] ?? tc.function.name;
-        buffer.writeln('${i + 1}. $toolName');
-      }
-    }
-    
-    buffer.writeln('\n⏳ 正在执行中...');
-    
-    return buffer.toString();
   }
   
   /// 解析工具参数

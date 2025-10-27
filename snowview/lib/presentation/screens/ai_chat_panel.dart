@@ -209,7 +209,7 @@ class _AIChatPanelState extends State<AIChatPanel> {
 
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
@@ -229,24 +229,30 @@ class _AIChatPanelState extends State<AIChatPanel> {
       return _buildStreamingMessage(message);
     }
     
-    // 普通消息直接显示
-    return ChatMessageBubble(message: message);
+    // 普通消息直接显示（增加消息间距）
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 0),
+      child: ChatMessageBubble(message: message),
+    );
   }
   
   /// 构建流式生成的消息（使用 StreamBuilder）
   Widget _buildStreamingMessage(ChatMessageHive message) {
     final aiProvider = context.read<AIProvider>();
     
-    return StreamBuilder<String>(
-      stream: aiProvider.currentMessageStream,
-      initialData: message.content,
-      builder: (context, snapshot) {
-        // 使用 Stream 中的最新内容
-        final content = snapshot.data ?? message.content;
-        return ChatMessageBubble(
-          message: message.copyWith(content: content),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: StreamBuilder<String>(
+        stream: aiProvider.currentMessageStream,
+        initialData: message.content,
+        builder: (context, snapshot) {
+          // 使用 Stream 中的最新内容
+          final content = snapshot.data ?? message.content;
+          return ChatMessageBubble(
+            message: message.copyWith(content: content),
+          );
+        },
+      ),
     );
   }
 

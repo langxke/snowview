@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:hive/hive.dart';
 import '../../../services/ai_tool_registry.dart';
+import '../../../data/models/calendar_event_hive.dart';
+import '../../../data/repositories/task_list_repository.dart';
 
 /// AI工具调用可视化组件
 /// 显示AI正在执行的工具调用，支持折叠/展开
@@ -17,7 +21,7 @@ class AIToolCallWidget extends StatefulWidget {
 }
 
 class _AIToolCallWidgetState extends State<AIToolCallWidget> {
-  bool _isExpanded = true;
+  bool _isExpanded = false; // 改为默认折叠
 
   @override
   Widget build(BuildContext context) {
@@ -26,142 +30,351 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
+    final mutedColor = colorScheme.onSurface.withOpacity(0.5);
+    
+    // 单个工具且不是批量操作时，直接显示一行，不可展开
+    if (widget.toolCallsJson.length == 1 && !_isBatchOperation()) {
+      return _buildSimpleToolDisplay(colorScheme, mutedColor);
+    }
 
+    // 单个批量操作或多个工具时，显示可展开的列表
+    return _buildExpandableToolDisplay(colorScheme, mutedColor);
+  }
+  
+  /// 判断是否是批量操作
+  bool _isBatchOperation() {
+    try {
+      final toolCall = jsonDecode(widget.toolCallsJson.first);
+      final functionName = toolCall['function']?['name'] ?? '';
+      
+      const batchTools = {
+        'batch_create_tasks',
+        'batch_delete_tasks',
+        'batch_create_calendar_events',
+        'batch_delete_calendar_events',
+        'batch_add_subtasks',
+        'batch_delete_subtasks',
+      };
+      
+      return batchTools.contains(functionName);
+    } catch (e) {
+      return false;
+    }
+  }
+  
+  /// 构建可展开的工具显示
+  Widget _buildExpandableToolDisplay(ColorScheme colorScheme, Color mutedColor) {
+    // 如果是单个批量操作，获取汇总信息
+    String summaryText;
+    if (widget.toolCallsJson.length == 1) {
+      try {
+        final toolCall = jsonDecode(widget.toolCallsJson.first);
+        final functionName = toolCall['function']?['name'] ?? '';
+        final arguments = toolCall['function']?['arguments'];
+        final toolName = _formatToolName(functionName);
+        final inlineArgs = _formatInlineArguments(arguments);
+        summaryText = '$toolName$inlineArgs';
+      } catch (e) {
+        summaryText = 'Used 1 tool';
+      }
+    } else {
+      summaryText = 'Used ${widget.toolCallsJson.length} tools';
+    }
+    
     return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: colorScheme.primaryContainer.withOpacity(0.3),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: colorScheme.primary.withOpacity(0.3),
-          width: 1,
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 标题和折叠按钮
+          // 精简的标题栏（灰色小字，可点击）
           InkWell(
             onTap: () => setState(() => _isExpanded = !_isExpanded),
             borderRadius: BorderRadius.circular(4),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.settings_suggest,
-                    size: 16,
-                    color: colorScheme.primary,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.functions,
+                  size: 14,
+                  color: mutedColor,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  summaryText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: mutedColor,
+                    fontWeight: FontWeight.normal,
                   ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      '执行了 ${widget.toolCallsJson.length} 个操作',
-                      style: TextStyle(
-                        color: colorScheme.primary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  Icon(
-                    _isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: colorScheme.primary,
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 2),
+                Icon(
+                  _isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  size: 16,
+                  color: mutedColor,
+                ),
+              ],
             ),
           ),
           
-          // 工具列表（可折叠）
+          // 展开的工具列表（纯文字，无装饰）
           if (_isExpanded) ...[
-            const SizedBox(height: 8),
-            ...widget.toolCallsJson.asMap().entries.map((entry) {
-              final index = entry.key;
-              final toolCallJson = entry.value;
-              
-              try {
-                final toolCall = jsonDecode(toolCallJson);
-                final functionName = toolCall['function']?['name'] ?? '未知操作';
-                final arguments = toolCall['function']?['arguments'];
-                
-                return Padding(
-                  padding: const EdgeInsets.only(left: 4, top: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 序号（多个工具时）或图标（单个工具时）
-                      widget.toolCallsJson.length > 1
-                        ? Container(
-                            width: 18,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Text(
-                                '${index + 1}',
-                                style: TextStyle(
-                                  color: colorScheme.onPrimary,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          )
-                        : Icon(
-                            Icons.build,
-                            size: 16,
-                            color: colorScheme.primary,
-                          ),
-                      const SizedBox(width: 8),
-                      
-                      // 操作名称和参数
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _formatToolName(functionName),
-                              style: TextStyle(
-                                color: colorScheme.onSurface,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            if (arguments != null && arguments.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                child: Text(
-                                  _formatArguments(arguments),
-                                  style: TextStyle(
-                                    color: colorScheme.onSurface.withOpacity(0.6),
-                                    fontSize: 10,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      
-                      // 完成图标
-                      Icon(
-                        Icons.check_circle,
-                        size: 16,
-                        color: colorScheme.tertiary,
-                      ),
-                    ],
-                  ),
-                );
-              } catch (e) {
-                return const SizedBox.shrink();
-              }
-            }).toList(),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _buildExpandedToolList(colorScheme, mutedColor),
+              ),
+            ),
           ],
+        ],
+      ),
+    );
+  }
+  
+  /// 构建单个工具的单行显示
+  Widget _buildSimpleToolDisplay(ColorScheme colorScheme, Color mutedColor) {
+    try {
+      final toolCall = jsonDecode(widget.toolCallsJson.first);
+      final functionName = toolCall['function']?['name'] ?? '未知操作';
+      final arguments = toolCall['function']?['arguments'];
+      
+      final toolName = _formatToolName(functionName);
+      final inlineArgs = _formatInlineArguments(arguments);
+      
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+        child: Text(
+          '$toolName$inlineArgs',
+          style: TextStyle(
+            fontSize: 12,
+            color: mutedColor,
+            fontWeight: FontWeight.normal,
+          ),
+        ),
+      );
+    } catch (e) {
+      return const SizedBox.shrink();
+    }
+  }
+
+  /// 构建展开后的工具列表（极简风格）
+  List<Widget> _buildExpandedToolList(ColorScheme colorScheme, Color mutedColor) {
+    // 如果是单个批量操作，展开显示每个项目
+    if (widget.toolCallsJson.length == 1) {
+      try {
+        final toolCall = jsonDecode(widget.toolCallsJson.first);
+        final functionName = toolCall['function']?['name'] ?? '';
+        
+        const batchTools = {
+          'batch_create_tasks',
+          'batch_delete_tasks',
+          'batch_create_calendar_events',
+          'batch_delete_calendar_events',
+          'batch_add_subtasks',
+          'batch_delete_subtasks',
+        };
+        
+        if (batchTools.contains(functionName)) {
+          return _buildBatchOperationDetails(context, toolCall, colorScheme, mutedColor);
+        }
+      } catch (e) {
+        // 解析失败，继续使用普通显示
+      }
+    }
+    
+    // 普通工具列表显示
+    return widget.toolCallsJson.asMap().entries.map((entry) {
+      final toolCallJson = entry.value;
+      
+      try {
+        final toolCall = jsonDecode(toolCallJson);
+        final functionName = toolCall['function']?['name'] ?? '未知操作';
+        final arguments = toolCall['function']?['arguments'];
+        
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 小圆点（替代序号）
+              Container(
+                margin: const EdgeInsets.only(top: 6),
+                width: 4,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withOpacity(0.6),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              
+              // 工具名 + 参数（单行）
+              Expanded(
+                child: Text(
+                  '${_formatToolName(functionName)}${_formatInlineArguments(arguments)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurface.withOpacity(0.7),
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      } catch (e) {
+        return const SizedBox.shrink();
+      }
+    }).toList();
+  }
+  
+  /// 构建批量操作的详细列表
+  List<Widget> _buildBatchOperationDetails(BuildContext context, Map<String, dynamic> toolCall, ColorScheme colorScheme, Color mutedColor) {
+    final widgets = <Widget>[];
+    
+    try {
+      final functionName = toolCall['function']?['name'] ?? '';
+      final arguments = toolCall['function']?['arguments'];
+      
+      Map<String, dynamic> args;
+      if (arguments is Map) {
+        args = Map<String, dynamic>.from(arguments);
+      } else if (arguments is String) {
+        args = jsonDecode(arguments) as Map<String, dynamic>;
+      } else {
+        return [const SizedBox.shrink()];
+      }
+      
+      // 批量创建任务
+      if (functionName == 'batch_create_tasks' && args.containsKey('tasks')) {
+        final tasks = args['tasks'] as List;
+        for (var i = 0; i < tasks.length; i++) {
+          final task = tasks[i] as Map<String, dynamic>;
+          final title = task['title'] ?? '未命名任务';
+          final date = task['date'] != null ? ' · ${task['date']}' : '';
+          widgets.add(_buildBatchItem(colorScheme, mutedColor, title + date));
+        }
+      }
+      
+      // 批量删除任务
+      else if (functionName == 'batch_delete_tasks' && args.containsKey('taskIds')) {
+        final taskIds = args['taskIds'] as List;
+        final taskRepository = context.read<TaskListRepository>();
+        
+        for (var i = 0; i < taskIds.length; i++) {
+          final taskId = taskIds[i].toString();
+          final task = taskRepository.getTaskById(taskId);
+          final displayText = task != null ? task.title : '任务 ${i + 1}';
+          widgets.add(_buildBatchItem(colorScheme, mutedColor, displayText));
+        }
+      }
+      
+      // 批量创建日程
+      else if (functionName == 'batch_create_calendar_events' && args.containsKey('events')) {
+        final events = args['events'] as List;
+        for (var i = 0; i < events.length; i++) {
+          final event = events[i] as Map<String, dynamic>;
+          final title = event['title'] ?? '未命名日程';
+          final date = event['date'] != null ? ' · ${event['date']}' : '';
+          final time = event['startTime'] != null ? ' ${event['startTime']}' : '';
+          widgets.add(_buildBatchItem(colorScheme, mutedColor, title + date + time));
+        }
+      }
+      
+      // 批量删除日程
+      else if (functionName == 'batch_delete_calendar_events' && args.containsKey('eventIds')) {
+        final eventIds = args['eventIds'] as List;
+        final eventBox = Hive.box<CalendarEventHive>('calendar_events');
+        
+        for (var i = 0; i < eventIds.length; i++) {
+          final eventId = eventIds[i].toString();
+          final event = eventBox.get(eventId);
+          if (event != null) {
+            final dateStr = event.start.toString().split(' ')[0];
+            widgets.add(_buildBatchItem(colorScheme, mutedColor, '${event.title} ($dateStr)'));
+          } else {
+            widgets.add(_buildBatchItem(colorScheme, mutedColor, '日程 ${i + 1}'));
+          }
+        }
+      }
+      
+      // 批量添加子步骤
+      else if (functionName == 'batch_add_subtasks' && args.containsKey('subtasks')) {
+        final subtasks = args['subtasks'] as List;
+        for (var i = 0; i < subtasks.length; i++) {
+          final subtaskTitle = subtasks[i].toString();
+          widgets.add(_buildBatchItem(colorScheme, mutedColor, subtaskTitle));
+        }
+      }
+      
+      // 批量删除子步骤
+      else if (functionName == 'batch_delete_subtasks' && args.containsKey('subtaskIds')) {
+        final subtaskIds = args['subtaskIds'] as List;
+        final taskId = args['taskId'] as String?;
+        
+        if (taskId != null) {
+          final taskRepository = context.read<TaskListRepository>();
+          final task = taskRepository.getTaskById(taskId);
+          
+          if (task != null) {
+            for (var i = 0; i < subtaskIds.length; i++) {
+              final subtaskId = subtaskIds[i].toString();
+              final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
+              final displayText = subtask != null ? subtask.title : '子步骤 ${i + 1}';
+              widgets.add(_buildBatchItem(colorScheme, mutedColor, displayText));
+            }
+          } else {
+            // 任务不存在时，显示序号
+            for (var i = 0; i < subtaskIds.length; i++) {
+              widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
+            }
+          }
+        } else {
+          // 没有taskId时，显示序号
+          for (var i = 0; i < subtaskIds.length; i++) {
+            widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
+          }
+        }
+      }
+    } catch (e) {
+      return [const SizedBox.shrink()];
+    }
+    
+    return widgets.isEmpty ? [const SizedBox.shrink()] : widgets;
+  }
+  
+  /// 构建批量操作的单个项目
+  Widget _buildBatchItem(ColorScheme colorScheme, Color mutedColor, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 小圆点
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            width: 4,
+            height: 4,
+            decoration: BoxDecoration(
+              color: colorScheme.primary.withOpacity(0.6),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          
+          // 项目内容
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurface.withOpacity(0.7),
+                height: 1.4,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -188,29 +401,76 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
       
       final parts = <String>[];
       
+      // 任务相关
       if (args.containsKey('title')) {
-        parts.add('标题: ${args['title']}');
+        parts.add(args['title']);
       }
-      if (args.containsKey('taskId')) {
-        parts.add('任务: ${args['taskId']}');
-      }
-      if (args.containsKey('eventId')) {
-        parts.add('事件: ${args['eventId']}');
-      }
-      if (args.containsKey('date')) {
-        parts.add('日期: ${args['date']}');
-      }
-      if (args.containsKey('startTime')) {
-        parts.add('时间: ${args['startTime']}');
+      if (args.containsKey('description') && args['description']?.toString().isNotEmpty == true) {
+        final desc = args['description'].toString();
+        if (desc.length > 30) {
+          parts.add('${desc.substring(0, 30)}...');
+        } else {
+          parts.add(desc);
+        }
       }
       
-      return parts.isEmpty ? '' : parts.join(', ');
+      // 日期时间相关
+      if (args.containsKey('date')) {
+        parts.add(args['date']);
+      }
+      if (args.containsKey('startTime')) {
+        parts.add(args['startTime']);
+      }
+      if (args.containsKey('duration')) {
+        parts.add('${args['duration']}分钟');
+      }
+      
+      // 专注相关
+      if (args.containsKey('mode')) {
+        final mode = args['mode'];
+        if (mode == 'work') parts.add('工作模式');
+        if (mode == 'rest') parts.add('休息模式');
+        if (mode == 'deep') parts.add('深度专注');
+      }
+      
+      // 子步骤相关
+      if (args.containsKey('subtaskTitle')) {
+        parts.add(args['subtaskTitle']);
+      }
+      if (args.containsKey('subtasks') && args['subtasks'] is List) {
+        final count = (args['subtasks'] as List).length;
+        parts.add('$count个子步骤');
+      }
+      
+      // 批量操作相关
+      if (args.containsKey('taskIds') && args['taskIds'] is List) {
+        final count = (args['taskIds'] as List).length;
+        parts.add('$count个任务');
+      }
+      if (args.containsKey('eventIds') && args['eventIds'] is List) {
+        final count = (args['eventIds'] as List).length;
+        parts.add('$count个日程');
+      }
+      if (args.containsKey('tasks') && args['tasks'] is List) {
+        final count = (args['tasks'] as List).length;
+        parts.add('$count个任务');
+      }
+      if (args.containsKey('events') && args['events'] is List) {
+        final count = (args['events'] as List).length;
+        parts.add('$count个日程');
+      }
+      
+      return parts.isEmpty ? '' : parts.join(' · ');
     } catch (e) {
       // 解析失败，返回空字符串
-      print('[AIToolCallWidget] 参数解析失败: $arguments');
-      print('[AIToolCallWidget] 错误: $e');
       return '';
     }
+  }
+
+  /// 格式化参数为单行显示（用于简单工具）
+  String _formatInlineArguments(dynamic arguments) {
+    final formatted = _formatArguments(arguments);
+    return formatted.isEmpty ? '' : ': $formatted';
   }
 
   /// 格式化工具名称为中文

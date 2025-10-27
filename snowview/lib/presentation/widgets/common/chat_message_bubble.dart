@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:intl/intl.dart';
 import '../../../data/models/chat_message_hive.dart';
 import 'ai_tool_call_widget.dart';
 
@@ -39,112 +38,119 @@ class ChatMessageBubble extends StatelessWidget {
           crossAxisAlignment:
               isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? colorScheme.primaryContainer
-                    : colorScheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 消息内容 - 支持 Markdown
-                  if (isUser)
-                    // 用户消息：使用普通文本
-                    SelectableText(
-                      message.content,
-                      style: TextStyle(
-                        color: colorScheme.onPrimaryContainer,
-                        fontSize: 14,
-                      ),
-                    )
-                  else
-                    // AI消息：使用 Markdown 渲染，支持跨段落选择
-                    SelectionArea(
-                      child: MarkdownBody(
-                        data: message.content,
-                        selectable: false, // SelectionArea 会处理选择
-                        styleSheet: MarkdownStyleSheet(
-                          p: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 14,
-                          ),
-                          h1: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          h2: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          h3: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          listBullet: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: 14,
-                          ),
-                          code: TextStyle(
-                            color: colorScheme.primary,
-                            backgroundColor: colorScheme.surface,
-                            fontFamily: 'monospace',
-                            fontSize: 13,
-                          ),
-                          codeblockDecoration: BoxDecoration(
-                            color: colorScheme.surface,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: colorScheme.outline.withOpacity(0.3),
-                            ),
-                          ),
-                          blockquote: TextStyle(
-                            color: colorScheme.onSurfaceVariant.withOpacity(0.8),
-                            fontSize: 14,
-                            fontStyle: FontStyle.italic,
-                          ),
-                          blockquoteDecoration: BoxDecoration(
-                            border: Border(
-                              left: BorderSide(
-                                color: colorScheme.primary,
-                                width: 3,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  
-                  // 工具调用指示（如果有）
-                  if (message.toolCalls != null && message.toolCalls!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: AIToolCallWidget(toolCallsJson: message.toolCalls!),
-                    ),
-                ],
-              ),
-            ),
+            // 消息内容（条件性气泡包裹）
+            // 只有当 content 不为空时才显示
+            if (message.content.trim().isNotEmpty)
+              _buildMessageContainer(context, isUser, colorScheme),
             
-            // 时间戳
-            Padding(
-              padding: const EdgeInsets.only(top: 2, left: 12, right: 12),
-              child: Text(
-                _formatTimestamp(message.timestamp),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.outline,
-                      fontSize: 11,
-                    ),
+            // 工具调用指示（如果有，放在气泡外部）
+            if (message.toolCalls != null && message.toolCalls!.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(
+                  top: message.content.trim().isNotEmpty ? 4 : 0,
+                ),
+                child: AIToolCallWidget(toolCallsJson: message.toolCalls!),
               ),
-            ),
           ],
         ),
       ),
     );
+  }
+
+  /// 构建消息内容容器（用户有气泡，AI无气泡）
+  Widget _buildMessageContainer(BuildContext context, bool isUser, ColorScheme colorScheme) {
+    final content = _buildContent(context, isUser, colorScheme);
+    
+    if (isUser) {
+      // 用户消息：带背景色的气泡框
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: content,
+      );
+    } else {
+      // AI消息：无气泡，直接显示
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: content,
+      );
+    }
+  }
+
+  /// 构建消息内容
+  Widget _buildContent(BuildContext context, bool isUser, ColorScheme colorScheme) {
+    if (isUser) {
+      // 用户消息：使用普通文本
+      return SelectableText(
+        message.content,
+        style: TextStyle(
+          color: colorScheme.onPrimaryContainer,
+          fontSize: 14,
+        ),
+      );
+    } else {
+      // AI消息：使用 Markdown 渲染，支持跨段落选择
+      return SelectionArea(
+        child: MarkdownBody(
+          data: message.content,
+          selectable: false, // SelectionArea 会处理选择
+          styleSheet: MarkdownStyleSheet(
+            p: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 14,
+            ),
+            h1: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+            h2: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+            h3: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+            listBullet: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 14,
+            ),
+            code: TextStyle(
+              color: colorScheme.primary,
+              backgroundColor: colorScheme.surface,
+              fontFamily: 'monospace',
+              fontSize: 13,
+            ),
+            codeblockDecoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: colorScheme.outline.withOpacity(0.3),
+              ),
+            ),
+            blockquote: TextStyle(
+              color: colorScheme.onSurface.withOpacity(0.8),
+              fontSize: 14,
+              fontStyle: FontStyle.italic,
+            ),
+            blockquoteDecoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: colorScheme.primary,
+                  width: 3,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   /// 构建系统消息（对话摘要）
@@ -179,24 +185,6 @@ class ChatMessageBubble extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  /// 格式化时间戳
-  String _formatTimestamp(DateTime timestamp) {
-    final now = DateTime.now();
-    final diff = now.difference(timestamp);
-
-    if (diff.inMinutes < 1) {
-      return '刚刚';
-    } else if (diff.inHours < 1) {
-      return '${diff.inMinutes}分钟前';
-    } else if (diff.inDays < 1) {
-      return DateFormat('HH:mm').format(timestamp);
-    } else if (diff.inDays < 7) {
-      return '${diff.inDays}天前';
-    } else {
-      return DateFormat('MM-dd HH:mm').format(timestamp);
-    }
   }
 }
 
