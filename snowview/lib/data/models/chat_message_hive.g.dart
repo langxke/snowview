@@ -24,13 +24,14 @@ class ChatMessageHiveAdapter extends TypeAdapter<ChatMessageHive> {
       toolCallId: fields[4] as String?,
       toolCalls: (fields[5] as List?)?.cast<String>(),
       sessionId: fields[6] as String?,
+      toolResults: fields[7] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, ChatMessageHive obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -44,7 +45,9 @@ class ChatMessageHiveAdapter extends TypeAdapter<ChatMessageHive> {
       ..writeByte(5)
       ..write(obj.toolCalls)
       ..writeByte(6)
-      ..write(obj.sessionId);
+      ..write(obj.sessionId)
+      ..writeByte(7)
+      ..write(obj.toolResults);
   }
 
   @override

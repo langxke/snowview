@@ -74,24 +74,44 @@ class AIToolCallOrchestrator {
       await onMessageGenerated(planMessage);
       
       // 2. 执行所有工具
-      await _executeAllTools(
+      final results = await _executeAllTools(
         toolCalls,
         sessionId,
         onMessageGenerated,
       );
+      
+      // 3. 将执行结果保存到 planMessage.toolResults
+      if (results.isNotEmpty) {
+        final resultsMap = <String, dynamic>{};
+        for (int i = 0; i < results.length; i++) {
+          resultsMap[toolCalls[i].id] = results[i].result ?? {};
+        }
+        
+        // 更新 planMessage 的 toolResults
+        planMessage.toolResults = jsonEncode(resultsMap);
+        
+        // 调试日志
+        print('[Tool Orchestrator] 🔍 保存的 resultsMap: $resultsMap');
+        print('[Tool Orchestrator] 🔍 toolResults JSON: ${planMessage.toolResults}');
+        
+        // 保存更新后的消息（利用 HiveObject 的 save 方法）
+        await planMessage.save();
+        
+        print('[Tool Orchestrator] 💾 已保存工具执行结果到消息');
+      }
       
       if (shouldStop) {
         print('[Tool Orchestrator] 🛑 执行过程中被停止');
         return ToolCallResult.stopped();
       }
       
-      // 3. 获取AI的最终回复
+      // 4. 获取AI的最终回复
       final finalResponse = await _getFinalResponse(
         conversationHistory: conversationHistory,
         sessionId: sessionId,
       );
       
-      // 4. 检查是否有新的工具调用（递归）
+      // 5. 检查是否有新的工具调用（递归）
       if (finalResponse.hasToolCalls) {
         print('[Tool Orchestrator] 🔄 AI 又请求了 ${finalResponse.toolCalls!.length} 个工具调用');
         return await handleToolCalls(
@@ -102,7 +122,7 @@ class AIToolCallOrchestrator {
         );
       }
       
-      // 5. 返回最终结果
+      // 6. 返回最终结果
       return ToolCallResult.success(
         message: finalResponse.message!,
         executedToolsCount: toolCalls.length,
@@ -359,6 +379,7 @@ class AIToolCallOrchestrator {
       content: '', // 空字符串，不显示文字内容
       toolCalls: toolCallsJson,
       sessionId: sessionId,
+      toolResults: null, // 初始为 null，执行完成后更新
     );
   }
   

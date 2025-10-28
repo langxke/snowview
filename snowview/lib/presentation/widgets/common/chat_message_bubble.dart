@@ -49,7 +49,10 @@ class ChatMessageBubble extends StatelessWidget {
                 padding: EdgeInsets.only(
                   top: message.content.trim().isNotEmpty ? 4 : 0,
                 ),
-                child: AIToolCallWidget(toolCallsJson: message.toolCalls!),
+                child: AIToolCallWidget(
+                  toolCallsJson: message.toolCalls!,
+                  toolResults: message.toolResults,
+                ),
               ),
           ],
         ),

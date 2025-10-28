@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/chat_message_hive.dart';
 import '../../data/models/chat_session_hive.dart';
@@ -23,6 +24,7 @@ class AIChatPanel extends StatefulWidget {
 class _AIChatPanelState extends State<AIChatPanel> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _keyboardListenerFocusNode = FocusNode();
   
   @override
   void initState() {
@@ -37,6 +39,7 @@ class _AIChatPanelState extends State<AIChatPanel> {
   void dispose() {
     _inputController.dispose();
     _scrollController.dispose();
+    _keyboardListenerFocusNode.dispose();
     super.dispose();
   }
 
@@ -406,25 +409,42 @@ class _AIChatPanelState extends State<AIChatPanel> {
           mainAxisSize: MainAxisSize.min,
           children: [
             // 文本输入区
-            TextField(
-              controller: _inputController,
-              minLines: 4,
-              maxLines: 6,
-              keyboardType: TextInputType.multiline,
-              textInputAction: TextInputAction.newline,
-              enabled: !aiProvider.isThinking && aiProvider.isConfigured,
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: aiProvider.isConfigured 
-                    ? (aiProvider.isThinkingMode 
-                        ? '请输入问题，AI将为您规划方案...' 
-                        : '请输入指令，AI将立即执行...')
-                    : '请先配置AI',
-                hintStyle: TextStyle(fontSize: 13, color: colorScheme.outline),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            KeyboardListener(
+              focusNode: _keyboardListenerFocusNode,
+              onKeyEvent: (event) {
+                // 处理键盘事件：回车发送，Shift+回车换行
+                if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.enter) {
+                  // 检查是否按下 Shift 键
+                  final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+                  
+                  if (!isShiftPressed) {
+                    // 单独按回车：发送消息
+                    _sendMessage();
+                    // 阻止默认的换行行为
+                  }
+                  // Shift+回车：允许换行（默认行为）
+                }
+              },
+              child: TextField(
+                controller: _inputController,
+                minLines: 4,
+                maxLines: 6,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                enabled: !aiProvider.isThinking && aiProvider.isConfigured,
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: aiProvider.isConfigured 
+                      ? (aiProvider.isThinkingMode 
+                          ? '请输入问题，AI将为您规划方案...\n(回车发送，Shift+回车换行)' 
+                          : '请输入指令，AI将立即执行...\n(回车发送，Shift+回车换行)')
+                      : '请先配置AI',
+                  hintStyle: TextStyle(fontSize: 13, color: colorScheme.outline),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                ),
               ),
             ),
             
@@ -572,6 +592,11 @@ class _AIChatPanelState extends State<AIChatPanel> {
 
     final aiProvider = context.read<AIProvider>();
     _inputController.clear();
+    
+    // 清空后再次清空，防止回车键插入的换行符残留
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _inputController.clear();
+    });
     
     // 发送消息
     aiProvider.sendMessage(text);

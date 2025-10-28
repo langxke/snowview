@@ -35,6 +35,12 @@ class ChatMessageHive extends HiveObject {
   @HiveField(6)
   String? sessionId;
 
+  /// 工具执行结果（JSON字符串）
+  /// 格式：Map<toolCallId, result>（toolCallId 到 result 的映射）
+  /// 用于UI展示批量操作的详细结果
+  @HiveField(7)
+  String? toolResults;
+
   ChatMessageHive({
     required this.id,
     required this.role,
@@ -43,6 +49,7 @@ class ChatMessageHive extends HiveObject {
     this.toolCallId,
     this.toolCalls,
     this.sessionId,
+    this.toolResults,
   });
 
   /// 是否为用户消息
@@ -80,6 +87,7 @@ class ChatMessageHive extends HiveObject {
     required String sessionId,
     DateTime? timestamp,
     List<String>? toolCalls,
+    String? toolResults,
   }) {
     return ChatMessageHive(
       id: id,
@@ -88,6 +96,7 @@ class ChatMessageHive extends HiveObject {
       timestamp: timestamp ?? DateTime.now(),
       toolCalls: toolCalls,
       sessionId: sessionId,
+      toolResults: toolResults,
     );
   }
 
@@ -134,6 +143,7 @@ class ChatMessageHive extends HiveObject {
     Object? toolCallId = _undefined,
     Object? toolCalls = _undefined,
     String? sessionId,
+    Object? toolResults = _undefined,
   }) {
     return ChatMessageHive(
       id: id ?? this.id,
@@ -146,12 +156,15 @@ class ChatMessageHive extends HiveObject {
           ? this.toolCalls
           : toolCalls as List<String>?,
       sessionId: sessionId ?? this.sessionId,
+      toolResults: toolResults == _undefined
+          ? this.toolResults
+          : toolResults as String?,
     );
   }
 
   @override
   String toString() {
-    return 'ChatMessageHive{id: $id, role: $role, content: ${content.length > 50 ? content.substring(0, 50) + "..." : content}}';
+    return 'ChatMessageHive{id: $id, role: $role, content: ${content.length > 50 ? '${content.substring(0, 50)}...' : content}}';
   }
 
   @override

@@ -10,10 +10,12 @@ import '../../../data/repositories/task_list_repository.dart';
 /// 显示AI正在执行的工具调用，支持折叠/展开
 class AIToolCallWidget extends StatefulWidget {
   final List<String> toolCallsJson;
+  final String? toolResults;
 
   const AIToolCallWidget({
     super.key,
     required this.toolCallsJson,
+    this.toolResults,
   });
 
   @override
@@ -22,6 +24,19 @@ class AIToolCallWidget extends StatefulWidget {
 
 class _AIToolCallWidgetState extends State<AIToolCallWidget> {
   bool _isExpanded = false; // 改为默认折叠
+
+  /// 解析工具执行结果
+  Map<String, dynamic> _getToolResults() {
+    if (widget.toolResults == null || widget.toolResults!.isEmpty) {
+      return {};
+    }
+    try {
+      return jsonDecode(widget.toolResults!) as Map<String, dynamic>;
+    } catch (e) {
+      print('[AIToolCallWidget] ⚠️ 解析 toolResults 失败: $e');
+      return {};
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -237,6 +252,7 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
     try {
       final functionName = toolCall['function']?['name'] ?? '';
       final arguments = toolCall['function']?['arguments'];
+      final toolCallId = toolCall['id'] as String?;
       
       Map<String, dynamic> args;
       if (arguments is Map) {
@@ -245,6 +261,22 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
         args = jsonDecode(arguments) as Map<String, dynamic>;
       } else {
         return [const SizedBox.shrink()];
+      }
+      
+      // 获取该工具的执行结果
+      final allResults = _getToolResults();
+      final result = (toolCallId != null && allResults.containsKey(toolCallId))
+          ? allResults[toolCallId] as Map<String, dynamic>?
+          : null;
+      
+      // 调试日志
+      if (functionName == 'batch_delete_subtasks') {
+        print('[AIToolCallWidget] 🔍 批量删除子步骤 - toolCallId: $toolCallId');
+        print('[AIToolCallWidget] 🔍 allResults keys: ${allResults.keys.toList()}');
+        print('[AIToolCallWidget] 🔍 result: $result');
+        if (result != null) {
+          print('[AIToolCallWidget] 🔍 deletedSubtasks: ${result['deletedSubtasks']}');
+        }
       }
       
       // 批量创建任务
@@ -312,29 +344,41 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
       // 批量删除子步骤
       else if (functionName == 'batch_delete_subtasks' && args.containsKey('subtaskIds')) {
         final subtaskIds = args['subtaskIds'] as List;
-        final taskId = args['taskId'] as String?;
         
-        if (taskId != null) {
-          final taskRepository = context.read<TaskListRepository>();
-          final task = taskRepository.getTaskById(taskId);
+        // 优先从执行结果中获取删除的子步骤信息
+        if (result != null && result.containsKey('deletedSubtasks')) {
+          final deletedSubtasks = result['deletedSubtasks'] as List;
+          for (var subtask in deletedSubtasks) {
+            // deletedSubtasks 是字符串列表（标题列表）
+            final title = subtask.toString();
+            widgets.add(_buildBatchItem(colorScheme, mutedColor, title));
+          }
+        } else {
+          // 如果没有执行结果，回退到从 Repository 查询（兼容旧数据）
+          final taskId = args['taskId'] as String?;
           
-          if (task != null) {
-            for (var i = 0; i < subtaskIds.length; i++) {
-              final subtaskId = subtaskIds[i].toString();
-              final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
-              final displayText = subtask != null ? subtask.title : '子步骤 ${i + 1}';
-              widgets.add(_buildBatchItem(colorScheme, mutedColor, displayText));
+          if (taskId != null) {
+            final taskRepository = context.read<TaskListRepository>();
+            final task = taskRepository.getTaskById(taskId);
+            
+            if (task != null) {
+              for (var i = 0; i < subtaskIds.length; i++) {
+                final subtaskId = subtaskIds[i].toString();
+                final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
+                final displayText = subtask != null ? subtask.title : '子步骤 ${i + 1}';
+                widgets.add(_buildBatchItem(colorScheme, mutedColor, displayText));
+              }
+            } else {
+              // 任务不存在时，显示序号
+              for (var i = 0; i < subtaskIds.length; i++) {
+                widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
+              }
             }
           } else {
-            // 任务不存在时，显示序号
+            // 没有taskId时，显示序号
             for (var i = 0; i < subtaskIds.length; i++) {
               widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
             }
-          }
-        } else {
-          // 没有taskId时，显示序号
-          for (var i = 0; i < subtaskIds.length; i++) {
-            widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
           }
         }
       }
