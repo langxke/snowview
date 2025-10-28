@@ -20,6 +20,8 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  // GlobalKey 确保 IndexedStack 状态在布局变化时保持
+  final _sectionStackKey = GlobalKey();
 
   // 右侧 AI 面板是否显示
   bool _showAI = true;
@@ -119,13 +121,18 @@ class _MainScreenState extends State<MainScreen> {
     final navigationProvider = context.watch<NavigationProvider>();
     final currentSection = _MainSection.values[navigationProvider.currentIndex];
     
-    final sectionWidget = switch (currentSection) {
-      _MainSection.todo => const TaskListScreen(),
-      _MainSection.calendar => const ScheduleScreen(),
-      _MainSection.focus => const FocusScreen(),
-      _MainSection.journal => const JournalScreen(),
-      _MainSection.settings => const SettingsScreen(),
-    };
+    // 使用 IndexedStack 保持所有页面状态，配合 GlobalKey 确保位置变化时状态不丢失
+    final indexedStack = IndexedStack(
+      key: _sectionStackKey,
+      index: navigationProvider.currentIndex,
+      children: const [
+        TaskListScreen(),
+        ScheduleScreen(),
+        FocusScreen(),
+        JournalScreen(),
+        SettingsScreen(),
+      ],
+    );
     
     // 如果不在专注页面，且有活动会话，显示顶部状态条
     if (currentSection != _MainSection.focus) {
@@ -135,16 +142,16 @@ class _MainScreenState extends State<MainScreen> {
             return Column(
               children: [
                 _buildFocusStatusBar(context, focusProvider),
-                Expanded(child: sectionWidget),
+                Expanded(child: indexedStack),
               ],
             );
           }
-          return sectionWidget;
+          return indexedStack;
         },
       );
     }
     
-    return sectionWidget;
+    return indexedStack;
   }
   
   /// 构建专注状态条
