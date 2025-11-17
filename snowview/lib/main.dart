@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:window_manager/window_manager.dart';
 import 'core/theme/app_theme.dart';
 import 'presentation/providers/task_provider.dart';
 import 'presentation/providers/theme_provider.dart';
@@ -37,6 +38,24 @@ import 'presentation/providers/ai_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 初始化窗口管理器
+  await windowManager.ensureInitialized();
+  
+  // 设置窗口选项
+  const windowOptions = WindowOptions(
+    size: Size(1200, 800),
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: false,
+    titleBarStyle: TitleBarStyle.hidden, // 隐藏原生标题栏，使用自定义标题栏
+  );
+  
+  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+    await windowManager.setTitle('雪象SnowView');
+  });
   
   // 初始化Hive
   await initHive();
@@ -180,7 +199,7 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, theme, _) => MaterialApp(
-          title: '雪象 SnowView',
+          title: '雪象SnowView',
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
           themeMode: theme.mode,

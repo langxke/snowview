@@ -91,7 +91,7 @@ class AIProvider extends ChangeNotifier {
   bool get isActionMode => _currentMode == 'action';
   
   /// 所有会话列表
-  List<ChatSessionHive> get sessions => _sessionMetadata;
+  List<ChatSessionHive> get sessions => List.unmodifiable(_sessionMetadata);
   
   /// 当前会话
   ChatSessionHive? get currentSession => 

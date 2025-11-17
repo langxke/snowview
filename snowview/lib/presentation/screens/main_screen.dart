@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/focus_provider.dart';
 import '../providers/navigation_provider.dart';
+import '../widgets/custom_title_bar.dart';
 import 'schedule_screen.dart';
 import 'settings_screen.dart';
 import 'tasks/task_list_screen.dart';
@@ -37,83 +38,106 @@ class _MainScreenState extends State<MainScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final navigationProvider = context.watch<NavigationProvider>();
     
-    return Scaffold(
-      body: Row(
-        children: [
-          SizedBox(
-            width: 56,
-            child: Stack(
+    return Column(
+      children: [
+        // 自定义标题栏 - 会随主题变化而改变颜色
+        const CustomTitleBar(),
+        
+        // 主内容区域
+        Expanded(
+          child: Scaffold(
+            body: Row(
               children: [
-                NavigationRail(
-                  minWidth: 56,
-                  selectedIndex: navigationProvider.currentIndex,
-                  onDestinationSelected: (i) {
-                    navigationProvider.navigateTo(i);
-                  },
-                  labelType: NavigationRailLabelType.all,
-                  destinations: const [
-                    NavigationRailDestination(
-                      icon: Icon(Icons.list_alt_outlined),
-                      selectedIcon: Icon(Icons.list_alt),
-                      label: Text('清单'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.calendar_today_outlined),
-                      selectedIcon: Icon(Icons.calendar_today),
-                      label: Text('日历'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.timer_outlined),
-                      selectedIcon: Icon(Icons.timer),
-                      label: Text('专注'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.auto_stories_outlined),
-                      selectedIcon: Icon(Icons.auto_stories),
-                      label: Text('记录'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.settings_outlined),
-                      selectedIcon: Icon(Icons.settings),
-                      label: Text('设置'),
-                    ),
-                  ],
-                ),
-                Positioned(
-                  bottom: 4,
-                  left: 0,
-                  right: 0,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                SizedBox(
+                  width: 56,
+                  child: Stack(
                     children: [
-                      IconButton(
-                        tooltip: _showAI ? '隐藏 AI 对话' : '显示 AI 对话',
-                        icon: Icon(_showAI ? Icons.chat : Icons.chat_bubble_outline),
-                        onPressed: () {
-                          setState(() {
-                            _showAI = !_showAI;
-                          });
+                      NavigationRail(
+                        minWidth: 56,
+                        selectedIndex: navigationProvider.currentIndex,
+                        onDestinationSelected: (i) {
+                          navigationProvider.navigateTo(i);
                         },
+                        labelType: NavigationRailLabelType.all,
+                        destinations: const [
+                          NavigationRailDestination(
+                            icon: Icon(Icons.list_alt_outlined),
+                            selectedIcon: Icon(Icons.list_alt),
+                            label: Text('清单'),
+                          ),
+                          NavigationRailDestination(
+                            icon: Icon(Icons.calendar_today_outlined),
+                            selectedIcon: Icon(Icons.calendar_today),
+                            label: Text('日历'),
+                          ),
+                          NavigationRailDestination(
+                            icon: Icon(Icons.timer_outlined),
+                            selectedIcon: Icon(Icons.timer),
+                            label: Text('专注'),
+                          ),
+                          NavigationRailDestination(
+                            icon: Icon(Icons.auto_stories_outlined),
+                            selectedIcon: Icon(Icons.auto_stories),
+                            label: Text('记录'),
+                          ),
+                          NavigationRailDestination(
+                            icon: Icon(Icons.settings_outlined),
+                            selectedIcon: Icon(Icons.settings),
+                            label: Text('设置'),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                      IconButton(
-                        tooltip: isDark ? '切换到日间模式' : '切换到夜间模式',
-                        icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-                        onPressed: () {
-                          final newMode = isDark ? ThemeMode.light : ThemeMode.dark;
-                          context.read<ThemeProvider>().setMode(newMode);
-                        },
+                      Positioned(
+                        bottom: 4,
+                        left: 0,
+                        right: 0,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // AI助手按钮
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: _showAI ? '隐藏 AI 对话' : '显示 AI 对话',
+                                  icon: Icon(_showAI ? Icons.chat : Icons.chat_bubble_outline),
+                                  onPressed: () {
+                                    setState(() {
+                                      _showAI = !_showAI;
+                                    });
+                                  },
+                                ),
+                                Text(
+                                  'AI助手',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            IconButton(
+                              tooltip: isDark ? '切换到日间模式' : '切换到夜间模式',
+                              icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+                              onPressed: () {
+                                final newMode = isDark ? ThemeMode.light : ThemeMode.dark;
+                                context.read<ThemeProvider>().setMode(newMode);
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
                 ),
+                const VerticalDivider(width: 1, thickness: 1),
+                Expanded(child: _buildMainArea(context)),
               ],
             ),
           ),
-          const VerticalDivider(width: 1, thickness: 1),
-          Expanded(child: _buildMainArea(context)),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

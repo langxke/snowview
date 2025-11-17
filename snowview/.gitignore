@@ -43,3 +43,23 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local database files (Hive, SQLite)
+*.hive
+*.lock
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables and secrets
+.env
+.env.local
+*.key
+*.pem
+
+# User data and logs
+/data/
+/logs/
+
+# Documentation
+/docs/

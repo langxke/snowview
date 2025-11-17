@@ -64,9 +64,12 @@ class _AIChatPanelState extends State<AIChatPanel> {
             currentId: provider.currentSessionId,
           ),
           shouldRebuild: (prev, next) {
-            // 🎯 修复：比较列表长度和当前会话ID
-            return prev.sessions.length != next.sessions.length || 
-                   prev.currentId != next.currentId;
+            // 🎯 修复：比较列表长度、当前会话ID和列表实例
+            if (prev.sessions.length != next.sessions.length) return true;
+            if (prev.currentId != next.currentId) return true;
+            // 如果列表引用不同，说明列表被修改过（删除/重命名等）
+            if (!identical(prev.sessions, next.sessions)) return true;
+            return false;
           },
           builder: (context, data, __) {
             final aiProvider = context.read<AIProvider>();
