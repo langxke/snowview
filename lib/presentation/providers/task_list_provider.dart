@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import '../../data/models/task_category_hive.dart';
 import '../../data/models/checklist_task_hive.dart';
 import '../../data/models/subtask_hive.dart';
@@ -319,7 +320,7 @@ class TaskListProvider extends ChangeNotifier {
     if (task == null) return;
     
     final subTask = SubTaskHive(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: const Uuid().v4(),
       title: title,
       isCompleted: false,
       order: task.subTasks.length,
