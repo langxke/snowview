@@ -36,10 +36,6 @@ class AIToolMetadata {
   static const focusStart = 'start_focus_session';
   static const focusGetStats = 'get_focus_stats';
   
-  // 记录管理
-  static const journalCreate = 'create_journal_entry';
-  static const journalQuery = 'query_journals';
-  
   // ==================== 工具元数据定义 ====================
   
   /// 获取所有工具元数据
@@ -50,8 +46,6 @@ class AIToolMetadata {
     ...calendarManagementTools,
     // 专注管理工具
     ...focusManagementTools,
-    // 记录管理工具
-    ...journalManagementTools,
   ];
   
   // ==================== 任务管理工具 ====================
@@ -703,73 +697,6 @@ class AIToolMetadata {
               'date': {
                 'type': 'string',
                 'description': '查询日期，ISO 8601格式，默认今天',
-              },
-            },
-          },
-        ),
-      ),
-    ),
-  ];
-  
-  // ==================== 记录管理工具 ====================
-  
-  static List<ToolMetadata> get journalManagementTools => [
-    ToolMetadata(
-      name: journalCreate,
-      displayName: '创建记录',
-      description: '创建记录/日记',
-      category: ToolCategory.journal,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: journalCreate,
-          description: '创建记录/日记',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'categoryId': {
-                'type': 'string',
-                'description': '记录类别ID',
-              },
-              'title': {
-                'type': 'string',
-                'description': '标题（可选）',
-              },
-              'content': {
-                'type': 'string',
-                'description': '内容（Markdown格式）',
-              },
-              'mood': {
-                'type': 'string',
-                'description': '心情emoji（可选）',
-              },
-            },
-            'required': ['categoryId', 'content'],
-          },
-        ),
-      ),
-    ),
-    
-    ToolMetadata(
-      name: journalQuery,
-      displayName: '查询记录',
-      description: '查询记录列表',
-      category: ToolCategory.journal,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: journalQuery,
-          description: '查询记录列表',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'categoryId': {
-                'type': 'string',
-                'description': '类别筛选',
-              },
-              'limit': {
-                'type': 'integer',
-                'description': '限制返回数量',
               },
             },
           },

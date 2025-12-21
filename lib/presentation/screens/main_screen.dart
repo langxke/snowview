@@ -8,10 +8,9 @@ import 'schedule_screen.dart';
 import 'settings_screen.dart';
 import 'tasks/task_list_screen.dart';
 import 'focus/focus_screen.dart';
-import 'journal/journal_screen.dart';
 import 'ai_chat_panel.dart';
 
-enum _MainSection { todo, calendar, focus, journal, settings }
+enum _MainSection { todo, calendar, focus, settings }
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -74,11 +73,6 @@ class _MainScreenState extends State<MainScreen> {
                             icon: Icon(Icons.timer_outlined),
                             selectedIcon: Icon(Icons.timer),
                             label: Text('专注'),
-                          ),
-                          NavigationRailDestination(
-                            icon: Icon(Icons.auto_stories_outlined),
-                            selectedIcon: Icon(Icons.auto_stories),
-                            label: Text('记录'),
                           ),
                           NavigationRailDestination(
                             icon: Icon(Icons.settings_outlined),
@@ -153,7 +147,6 @@ class _MainScreenState extends State<MainScreen> {
         TaskListScreen(),
         ScheduleScreen(),
         FocusScreen(),
-        JournalScreen(),
         SettingsScreen(),
       ],
     );

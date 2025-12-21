@@ -9,7 +9,6 @@ import 'presentation/providers/schedule_provider.dart';
 import 'presentation/providers/focus_provider.dart';
 import 'presentation/providers/task_list_provider.dart';
 import 'presentation/providers/navigation_provider.dart';
-import 'presentation/providers/journal_provider.dart';
 import 'presentation/screens/main_screen.dart';
 import 'data/models/calendar_event_hive.dart';
 import 'data/models/task_category_hive.dart';
@@ -18,16 +17,12 @@ import 'data/models/subtask_hive.dart';
 import 'data/models/work_session_hive.dart';
 import 'data/models/focus_session_hive.dart';
 import 'data/models/focus_daily_stats_hive.dart';
-import 'data/models/journal_entry_hive.dart';
-import 'data/models/journal_category_hive.dart';
 import 'data/models/ai_config_hive.dart';
 import 'data/models/chat_message_hive.dart';
 import 'data/models/chat_session_hive.dart';
 import 'data/repositories/task_list_repository.dart';
 import 'data/repositories/work_session_repository.dart';
 import 'data/repositories/focus_session_repository.dart';
-import 'data/repositories/journal_repository.dart';
-import 'data/repositories/journal_category_repository.dart';
 import 'data/repositories/ai_config_repository.dart';
 import 'data/repositories/chat_history_repository.dart';
 import 'data/repositories/chat_session_repository.dart';
@@ -82,10 +77,6 @@ Future<void> initHive() async {
   Hive.registerAdapter(FocusSessionHiveAdapter());
   Hive.registerAdapter(FocusDailyStatsHiveAdapter());
   
-  // 注册记录条目适配器
-  Hive.registerAdapter(JournalEntryHiveAdapter());
-  Hive.registerAdapter(JournalCategoryHiveAdapter());
-  
   // 注册AI配置适配器
   Hive.registerAdapter(AIConfigHiveAdapter());
   Hive.registerAdapter(ChatMessageHiveAdapter());
@@ -103,10 +94,6 @@ Future<void> initHive() async {
   
   // 初始化专注会话数据库
   await FocusSessionRepository.init();
-  
-  // 初始化记录数据库
-  await JournalCategoryRepository.init();
-  await JournalRepository.init();
   
   // 初始化AI配置数据库
   await AIConfigRepository.init();
@@ -131,19 +118,15 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => TaskListProvider(TaskListRepository()),
         ),
-        ChangeNotifierProvider(
-          create: (_) => JournalProvider(JournalRepository()),
-        ),
         // AI Provider - 需要依赖其他 providers
-        ChangeNotifierProxyProvider4<TaskListProvider, ScheduleProvider,
-            FocusProvider, JournalProvider, AIProvider>(
+        ChangeNotifierProxyProvider3<TaskListProvider, ScheduleProvider,
+            FocusProvider, AIProvider>(
           create: (context) {
             // ✅ 创建工具执行器并注册所有工具
             final toolExecutor = AIToolExecutor(
               taskProvider: context.read<TaskListProvider>(),
               scheduleProvider: context.read<ScheduleProvider>(),
               focusProvider: context.read<FocusProvider>(),
-              journalProvider: context.read<JournalProvider>(),
               taskRepository: TaskListRepository(),
             );
             toolExecutor.registerAllExecutors();
@@ -155,15 +138,13 @@ class MyApp extends StatelessWidget {
                 taskProvider: context.read<TaskListProvider>(),
                 scheduleProvider: context.read<ScheduleProvider>(),
                 focusProvider: context.read<FocusProvider>(),
-                journalProvider: context.read<JournalProvider>(),
               ),
               historyRepo: ChatHistoryRepository(),
               sessionRepo: ChatSessionRepository(),
               configRepo: AIConfigRepository(),
             );
           },
-          update: (context, taskProvider, scheduleProvider, focusProvider,
-              journalProvider, previous) {
+          update: (context, taskProvider, scheduleProvider, focusProvider, previous) {
             // ⚠️ 重要：重用现有的 AIProvider，避免在操作进行时被 dispose
             // 只有在 previous 为 null 时（首次创建）才创建新实例
             if (previous != null) {
@@ -176,7 +157,6 @@ class MyApp extends StatelessWidget {
               taskProvider: taskProvider,
               scheduleProvider: scheduleProvider,
               focusProvider: focusProvider,
-              journalProvider: journalProvider,
               taskRepository: TaskListRepository(),
             );
             toolExecutor.registerAllExecutors();
@@ -188,7 +168,6 @@ class MyApp extends StatelessWidget {
                 taskProvider: taskProvider,
                 scheduleProvider: scheduleProvider,
                 focusProvider: focusProvider,
-                journalProvider: journalProvider,
               ),
               historyRepo: ChatHistoryRepository(),
               sessionRepo: ChatSessionRepository(),

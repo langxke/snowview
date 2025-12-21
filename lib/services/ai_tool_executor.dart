@@ -3,7 +3,6 @@ import 'package:hive/hive.dart';
 import '../presentation/providers/task_list_provider.dart';
 import '../presentation/providers/schedule_provider.dart';
 import '../presentation/providers/focus_provider.dart';
-import '../presentation/providers/journal_provider.dart';
 import '../data/models/calendar_event_hive.dart';
 import '../data/repositories/task_list_repository.dart';
 import 'ai_tool_registry.dart';
@@ -14,14 +13,12 @@ class AIToolExecutor {
   final TaskListProvider taskProvider;
   final ScheduleProvider scheduleProvider;
   final FocusProvider focusProvider;
-  final JournalProvider journalProvider;
   final TaskListRepository taskRepository;
 
   AIToolExecutor({
     required this.taskProvider,
     required this.scheduleProvider,
     required this.focusProvider,
-    required this.journalProvider,
     required this.taskRepository,
   });
 
@@ -1038,67 +1035,6 @@ class AIToolExecutor {
       };
     }
   }
-
-  // ==================== 记录管理工具实现 ====================
-
-  Future<Map<String, dynamic>> _createJournalEntry(Map<String, dynamic> args) async {
-    try {
-      final categoryId = args['categoryId'] as String;
-      final title = args['title'] as String?;
-      final content = args['content'] as String;
-      final mood = args['mood'] as String?;
-
-      await journalProvider.createEntry(
-        categoryId: categoryId,
-        title: title,
-        content: content,
-        mood: mood,
-      );
-
-      return {
-        'success': true,
-        'message': '记录已创建',
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '创建记录失败: $e',
-      };
-    }
-  }
-
-  Future<Map<String, dynamic>> _queryJournals(Map<String, dynamic> args) async {
-    try {
-      final categoryId = args['categoryId'] as String?;
-      final limit = args['limit'] as int?;
-
-      var entries = journalProvider.entries;
-
-      if (categoryId != null) {
-        entries = entries.where((e) => e.categoryId == categoryId).toList();
-      }
-
-      if (limit != null && entries.length > limit) {
-        entries = entries.take(limit).toList();
-      }
-
-      return {
-        'success': true,
-        'count': entries.length,
-        'entries': entries.map((e) => {
-          'id': e.id,
-          'title': e.title,
-          'categoryId': e.categoryId,
-          'createdAt': e.createdAt.toIso8601String(),
-        }).toList(),
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '查询记录失败: $e',
-      };
-    }
-  }
   
   // ==================== 工具注册 ====================
   
@@ -1110,7 +1046,6 @@ class AIToolExecutor {
     final taskTools = AIToolMetadata.taskManagementTools;
     final calendarTools = AIToolMetadata.calendarManagementTools;
     final focusTools = AIToolMetadata.focusManagementTools;
-    final journalTools = AIToolMetadata.journalManagementTools;
     
     // 任务管理工具
     AIToolRegistry.register(taskTools[0].withExecutor(_createTask));
@@ -1137,9 +1072,5 @@ class AIToolExecutor {
     // 专注管理工具
     AIToolRegistry.register(focusTools[0].withExecutor(_startFocusSession));
     AIToolRegistry.register(focusTools[1].withExecutor(_getFocusStats));
-    
-    // 记录管理工具
-    AIToolRegistry.register(journalTools[0].withExecutor(_createJournalEntry));
-    AIToolRegistry.register(journalTools[1].withExecutor(_queryJournals));
   }
 }

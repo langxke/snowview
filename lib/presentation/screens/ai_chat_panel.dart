@@ -338,7 +338,6 @@ class _AIChatPanelState extends State<AIChatPanel> {
               children: [
                 _buildQuickAction('今天做什么？'),
                 _buildQuickAction('帮我安排明天'),
-                _buildQuickAction('写今天的日记'),
                 _buildQuickAction('创建学习任务'),
               ],
             ),

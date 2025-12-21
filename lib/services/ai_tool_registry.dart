@@ -183,6 +183,5 @@ class ToolCategory {
   static const task = '任务管理';
   static const calendar = '日历管理';
   static const focus = '专注管理';
-  static const journal = '记录管理';
 }
 

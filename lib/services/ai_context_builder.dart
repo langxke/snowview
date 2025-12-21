@@ -2,20 +2,17 @@ import 'package:intl/intl.dart';
 import '../presentation/providers/task_list_provider.dart';
 import '../presentation/providers/schedule_provider.dart';
 import '../presentation/providers/focus_provider.dart';
-import '../presentation/providers/journal_provider.dart';
 
 /// AI上下文构建器 - 构建包含当前系统状态的上下文信息
 class AIContextBuilder {
   final TaskListProvider taskProvider;
   final ScheduleProvider scheduleProvider;
   final FocusProvider focusProvider;
-  final JournalProvider journalProvider;
 
   AIContextBuilder({
     required this.taskProvider,
     required this.scheduleProvider,
     required this.focusProvider,
-    required this.journalProvider,
   });
 
   /// 构建完整的系统上下文
@@ -35,7 +32,6 @@ class AIContextBuilder {
 - 📋 **清单**：创建、更新、完成、删除任务，**添加/删除子步骤**，查询待办事项，**批量创建任务**，**批量删除任务**，**批量添加/删除子步骤**
 - 📅 **日历**：创建、修改、删除日程安排，查询指定日期的活动，智能查找空闲时间，**批量创建日程**，**批量删除日程**
 - ⏱️ **专注**：启动番茄钟或自定义专注会话，启动休息时间，查看专注统计数据
-- 📝 **记录**：创建和查询各类记录（日常、灵感、复盘等）
 
 ## 用户词汇理解
 用户可能使用不同的词汇来表达同一个功能，你需要理解这些同义词：
@@ -43,7 +39,6 @@ class AIContextBuilder {
 - **子步骤**：用户可能说"子任务"、"子步骤"、"步骤"、"子项"
 - **日历**：用户可能说"日历"、"日程"、"日程安排"、"行程"、"calendar"、"活动"、"事件"
 - **专注**：用户可能说"专注"、"番茄钟"、"pomodoro"、"计时"、"工作会话"
-- **记录**：用户可能说"记录"、"日记"、"笔记"、"journal"、"备忘"
 - **删除操作**：用户说"删除"、"移除"、"清除"、"去掉"都表示删除，**绝不是添加或创建**
 
 ## 工具执行机制与规划策略
@@ -233,9 +228,6 @@ ${_getModeRules(mode)}
 ### 清单类别
 ${_formatTaskCategories()}
 
-### 记录类别
-${_formatJournalCategories()}
-
 ## 待办任务（${_getUncompletedTaskCount()}个）
 ${_formatTasks()}
 
@@ -258,17 +250,6 @@ ${_formatTodayFocusStats()}
   /// 格式化清单类别
   String _formatTaskCategories() {
     final categories = taskProvider.categories;
-    if (categories.isEmpty) {
-      return '（无可用类别）';
-    }
-    return categories
-        .map((c) => '- ${c.id}: ${c.name}')
-        .join('\n');
-  }
-
-  /// 格式化记录类别
-  String _formatJournalCategories() {
-    final categories = journalProvider.categories;
     if (categories.isEmpty) {
       return '（无可用类别）';
     }
@@ -446,7 +427,6 @@ ${_formatTodayFocusStats()}
    **✅ 允许的操作（查询类）**：
    - ✅ `query_tasks` - 查询任务列表，了解当前待办事项
    - ✅ `query_events` - 查询日历事件，了解已有安排
-   - ✅ `query_journals` - 查询记录，了解历史情况
    - ✅ `get_focus_stats` - 查询专注统计
    - ✅ `find_free_time` - 查找空闲时间
    - 💡 **强烈建议**：在给出建议前，先查询现状，基于实际情况提供方案
@@ -491,7 +471,7 @@ ${_formatTodayFocusStats()}
    - 使用列表、编号等格式增强可读性
 
 5. **🚫 不要向用户展示ID信息**：
-   - **绝对禁止**在回复中向用户展示任何 ID（如 taskId、eventId、journalId 等）
+   - **绝对禁止**在回复中向用户展示任何 ID（如 taskId、eventId 等）
    - 用户无法理解或使用这些内部标识符，展示它们只会造成混乱
    - 用自然语言描述对象（如标题、名称、时间等）而不是ID
    - 即使在规划方案时，也应该用描述性的语言，而不是显示ID
@@ -572,7 +552,7 @@ ${_formatTodayFocusStats()}
    - 确保操作的精确性
 
 3. **🚫 不要向用户展示ID信息**：
-   - **绝对禁止**在回复中向用户展示任何 ID（如 taskId、eventId、journalId 等）
+   - **绝对禁止**在回复中向用户展示任何 ID（如 taskId、eventId 等）
    - 用户无法理解或使用这些内部标识符，展示它们只会造成混乱
    - ❌ 错误示例："已删除日程「绘画学习」（ID: f8a2cc37-0eb2-48f0-b34d-b20b7fa261b2）"
    - ✅ 正确示例："已删除日程「绘画学习」"
