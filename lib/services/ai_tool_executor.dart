@@ -40,12 +40,10 @@ class AIToolExecutor {
   Future<Map<String, dynamic>> _createTask(Map<String, dynamic> args) async {
     try {
       final title = args['title'] as String;
-      final categoryId = args['categoryId'] as String;
 
       // 使用 TaskListProvider 的 createTask 方法
       await taskProvider.createTask(
         title: title,
-        categoryId: categoryId,
       );
 
       // 获取刚创建的任务（最后一个）
@@ -104,14 +102,12 @@ class AIToolExecutor {
       for (final taskData in taskList) {
         try {
           final title = taskData['title'] as String;
-          final categoryId = taskData['categoryId'] as String;
           final dueDateStr = taskData['dueDate'] as String?;
           final description = taskData['description'] as String?;
 
           // 创建任务
           await taskProvider.createTask(
             title: title,
-            categoryId: categoryId,
           );
 
           // 如果有额外字段，更新任务
@@ -312,7 +308,6 @@ class AIToolExecutor {
   Future<Map<String, dynamic>> _queryTasks(Map<String, dynamic> args) async {
     try {
       final completed = args['completed'] as bool?;
-      final categoryId = args['categoryId'] as String?;
       final limit = args['limit'] as int?;
 
       var tasks = taskProvider.tasks;
@@ -320,10 +315,6 @@ class AIToolExecutor {
       // 筛选
       if (completed != null) {
         tasks = tasks.where((t) => t.isCompleted == completed).toList();
-      }
-
-      if (categoryId != null) {
-        tasks = tasks.where((t) => t.categoryId == categoryId).toList();
       }
 
       // 限制数量
@@ -337,232 +328,15 @@ class AIToolExecutor {
         'tasks': tasks.map((t) => {
           'id': t.id,
           'title': t.title,
+          'description': t.description,
           'isCompleted': t.isCompleted,
           'dueDate': t.dueDate?.toIso8601String(),
-          'categoryId': t.categoryId,
-          'subTasks': t.subTasks.map((st) => {
-            'id': st.id,
-            'title': st.title,
-            'isCompleted': st.isCompleted,
-          }).toList(),
         }).toList(),
       };
     } catch (e) {
       return {
         'success': false,
         'error': '查询任务失败: $e',
-      };
-    }
-  }
-
-  Future<Map<String, dynamic>> _addSubtask(Map<String, dynamic> args) async {
-    try {
-      final taskId = args['taskId'] as String;
-      final subtaskTitle = args['subtaskTitle'] as String;
-
-      await taskProvider.addSubTask(taskId, subtaskTitle);
-
-      return {
-        'success': true,
-        'message': '子步骤「$subtaskTitle」已添加',
-        'subtaskTitle': subtaskTitle,
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '添加子步骤失败: $e',
-      };
-    }
-  }
-
-  Future<Map<String, dynamic>> _batchAddSubtasks(Map<String, dynamic> args) async {
-    try {
-      final taskId = args['taskId'] as String;
-      final subtaskList = (args['subtasks'] as List).cast<String>();
-      
-      if (subtaskList.isEmpty) {
-        return {
-          'success': false,
-          'error': '子步骤列表不能为空',
-        };
-      }
-
-      // 检查任务是否存在
-      final task = taskRepository.getTaskById(taskId);
-      if (task == null) {
-        return {
-          'success': false,
-          'error': '任务不存在',
-        };
-      }
-
-      int successCount = 0;
-      int failureCount = 0;
-      final addedSubtasks = <String>[];
-      final errors = <String>[];
-
-      for (final subtaskTitle in subtaskList) {
-        try {
-          await taskProvider.addSubTask(taskId, subtaskTitle);
-          successCount++;
-          addedSubtasks.add(subtaskTitle);
-        } catch (e) {
-          failureCount++;
-          errors.add('添加「$subtaskTitle」失败: $e');
-        }
-      }
-
-      // 构建详细的添加信息
-      final messageBuffer = StringBuffer();
-      messageBuffer.writeln('批量添加子步骤完成：成功 $successCount 个，失败 $failureCount 个');
-      
-      if (addedSubtasks.isNotEmpty) {
-        messageBuffer.writeln('\n✅ 已添加的子步骤：');
-        for (final title in addedSubtasks) {
-          messageBuffer.writeln('  • $title');
-        }
-      }
-      
-      if (errors.isNotEmpty) {
-        messageBuffer.writeln('\n❌ 添加失败：');
-        for (final error in errors) {
-          messageBuffer.writeln('  • $error');
-        }
-      }
-
-      return {
-        'success': successCount > 0,
-        'totalCount': subtaskList.length,
-        'successCount': successCount,
-        'failureCount': failureCount,
-        'message': messageBuffer.toString().trim(),
-        'taskTitle': task.title,
-        if (addedSubtasks.isNotEmpty) 'addedSubtasks': addedSubtasks,
-        if (errors.isNotEmpty) 'errors': errors,
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '批量添加子步骤失败: $e',
-      };
-    }
-  }
-
-  Future<Map<String, dynamic>> _deleteSubtask(Map<String, dynamic> args) async {
-    try {
-      final taskId = args['taskId'] as String;
-      final subtaskId = args['subtaskId'] as String;
-
-      // 检查任务是否存在
-      final task = taskRepository.getTaskById(taskId);
-      if (task == null) {
-        return {
-          'success': false,
-          'error': '任务不存在: $taskId',
-        };
-      }
-
-      // 查找子步骤
-      final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
-      if (subtask == null) {
-        return {
-          'success': false,
-          'error': '子步骤不存在: $subtaskId',
-        };
-      }
-
-      await taskProvider.deleteSubTask(taskId, subtaskId);
-
-      return {
-        'success': true,
-        'message': '子步骤「${subtask.title}」已删除',
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '删除子步骤失败: $e',
-      };
-    }
-  }
-
-  Future<Map<String, dynamic>> _batchDeleteSubtasks(Map<String, dynamic> args) async {
-    try {
-      final taskId = args['taskId'] as String;
-      final subtaskIds = (args['subtaskIds'] as List).cast<String>();
-      
-      if (subtaskIds.isEmpty) {
-        return {
-          'success': false,
-          'error': '子步骤ID列表不能为空',
-        };
-      }
-
-      // 检查任务是否存在
-      final task = taskRepository.getTaskById(taskId);
-      if (task == null) {
-        return {
-          'success': false,
-          'error': '任务不存在',
-        };
-      }
-
-      int successCount = 0;
-      int failureCount = 0;
-      final deletedSubtasks = <String>[];
-      final errors = <String>[];
-
-      for (final subtaskId in subtaskIds) {
-        // 查找子步骤
-        final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
-        
-        if (subtask == null) {
-          failureCount++;
-          errors.add('子步骤不存在: $subtaskId');
-          continue;
-        }
-
-        try {
-          await taskProvider.deleteSubTask(taskId, subtaskId);
-          successCount++;
-          deletedSubtasks.add(subtask.title);
-        } catch (e) {
-          failureCount++;
-          errors.add('删除「${subtask.title}」失败: $e');
-        }
-      }
-
-      // 构建详细的删除信息
-      final messageBuffer = StringBuffer();
-      messageBuffer.writeln('批量删除子步骤完成：成功 $successCount 个，失败 $failureCount 个');
-      
-      if (deletedSubtasks.isNotEmpty) {
-        messageBuffer.writeln('\n✅ 已删除的子步骤：');
-        for (final title in deletedSubtasks) {
-          messageBuffer.writeln('  • $title');
-        }
-      }
-      
-      if (errors.isNotEmpty) {
-        messageBuffer.writeln('\n❌ 删除失败：');
-        for (final error in errors) {
-          messageBuffer.writeln('  • $error');
-        }
-      }
-
-      return {
-        'success': successCount > 0,
-        'totalCount': subtaskIds.length,
-        'successCount': successCount,
-        'failureCount': failureCount,
-        'message': messageBuffer.toString().trim(),
-        'taskTitle': task.title,
-        if (deletedSubtasks.isNotEmpty) 'deletedSubtasks': deletedSubtasks,
-        if (errors.isNotEmpty) 'errors': errors,
-      };
-    } catch (e) {
-      return {
-        'success': false,
-        'error': '批量删除子步骤失败: $e',
       };
     }
   }
@@ -1055,10 +829,6 @@ class AIToolExecutor {
     AIToolRegistry.register(taskTools[4].withExecutor(_deleteTask));
     AIToolRegistry.register(taskTools[5].withExecutor(_batchDeleteTasks));
     AIToolRegistry.register(taskTools[6].withExecutor(_queryTasks));
-    AIToolRegistry.register(taskTools[7].withExecutor(_addSubtask));
-    AIToolRegistry.register(taskTools[8].withExecutor(_batchAddSubtasks));
-    AIToolRegistry.register(taskTools[9].withExecutor(_deleteSubtask));
-    AIToolRegistry.register(taskTools[10].withExecutor(_batchDeleteSubtasks));
     
     // 日历管理工具
     AIToolRegistry.register(calendarTools[0].withExecutor(_createCalendarEvent));

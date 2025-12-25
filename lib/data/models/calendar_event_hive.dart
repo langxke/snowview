@@ -82,8 +82,6 @@ class CalendarEventHive extends HiveObject {
       color: color,
       start: start,
       end: end,
-      isTaskSession: false,  // ✅ 标记为日历事件
-      taskSessionId: null,   // ✅ 不是工作会话
     );
   }
   

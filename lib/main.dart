@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'core/theme/app_theme.dart';
 import 'presentation/providers/task_provider.dart';
 import 'presentation/providers/theme_provider.dart';
@@ -11,17 +12,13 @@ import 'presentation/providers/task_list_provider.dart';
 import 'presentation/providers/navigation_provider.dart';
 import 'presentation/screens/main_screen.dart';
 import 'data/models/calendar_event_hive.dart';
-import 'data/models/task_category_hive.dart';
 import 'data/models/checklist_task_hive.dart';
-import 'data/models/subtask_hive.dart';
-import 'data/models/work_session_hive.dart';
 import 'data/models/focus_session_hive.dart';
 import 'data/models/focus_daily_stats_hive.dart';
 import 'data/models/ai_config_hive.dart';
 import 'data/models/chat_message_hive.dart';
 import 'data/models/chat_session_hive.dart';
 import 'data/repositories/task_list_repository.dart';
-import 'data/repositories/work_session_repository.dart';
 import 'data/repositories/focus_session_repository.dart';
 import 'data/repositories/ai_config_repository.dart';
 import 'data/repositories/chat_history_repository.dart';
@@ -61,17 +58,24 @@ Future<void> main() async {
 Future<void> initHive() async {
   // 初始化Hive Flutter
   await Hive.initFlutter();
-  
+
+  // 清单数据结构已调整（移除子步骤/时间规划），不保留旧数据
+  final prefs = await SharedPreferences.getInstance();
+  const resetKey = 'checklist_storage_reset_v2';
+  final hasReset = prefs.getBool(resetKey) ?? false;
+
+  if (!hasReset) {
+    try {
+      await Hive.deleteBoxFromDisk('checklist_tasks');
+    } catch (_) {}
+    await prefs.setBool(resetKey, true);
+  }
+
   // 注册日历适配器
   Hive.registerAdapter(CalendarEventHiveAdapter());
   
   // 注册清单任务适配器
-  Hive.registerAdapter(TaskCategoryHiveAdapter());
-  Hive.registerAdapter(SubTaskHiveAdapter());
   Hive.registerAdapter(ChecklistTaskHiveAdapter());
-  
-  // 注册工作会话适配器
-  Hive.registerAdapter(WorkSessionHiveAdapter());
   
   // 注册专注会话适配器
   Hive.registerAdapter(FocusSessionHiveAdapter());
@@ -84,13 +88,9 @@ Future<void> initHive() async {
   
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
-  await Hive.openBox<WorkSessionHive>('work_sessions');
   
   // 初始化清单任务数据库
   await TaskListRepository.init();
-  
-  // 初始化工作会话数据库
-  await WorkSessionRepository.init();
   
   // 初始化专注会话数据库
   await FocusSessionRepository.init();

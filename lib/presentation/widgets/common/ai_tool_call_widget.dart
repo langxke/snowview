@@ -25,19 +25,6 @@ class AIToolCallWidget extends StatefulWidget {
 class _AIToolCallWidgetState extends State<AIToolCallWidget> {
   bool _isExpanded = false; // 改为默认折叠
 
-  /// 解析工具执行结果
-  Map<String, dynamic> _getToolResults() {
-    if (widget.toolResults == null || widget.toolResults!.isEmpty) {
-      return {};
-    }
-    try {
-      return jsonDecode(widget.toolResults!) as Map<String, dynamic>;
-    } catch (e) {
-      print('[AIToolCallWidget] ⚠️ 解析 toolResults 失败: $e');
-      return {};
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.toolCallsJson.isEmpty) {
@@ -62,13 +49,11 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
       final toolCall = jsonDecode(widget.toolCallsJson.first);
       final functionName = toolCall['function']?['name'] ?? '';
       
-      const batchTools = {
+      final batchTools = <String>{
         'batch_create_tasks',
         'batch_delete_tasks',
         'batch_create_calendar_events',
         'batch_delete_calendar_events',
-        'batch_add_subtasks',
-        'batch_delete_subtasks',
       };
       
       return batchTools.contains(functionName);
@@ -182,13 +167,11 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
         final toolCall = jsonDecode(widget.toolCallsJson.first);
         final functionName = toolCall['function']?['name'] ?? '';
         
-        const batchTools = {
+        final batchTools = <String>{
           'batch_create_tasks',
           'batch_delete_tasks',
           'batch_create_calendar_events',
           'batch_delete_calendar_events',
-          'batch_add_subtasks',
-          'batch_delete_subtasks',
         };
         
         if (batchTools.contains(functionName)) {
@@ -252,7 +235,6 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
     try {
       final functionName = toolCall['function']?['name'] ?? '';
       final arguments = toolCall['function']?['arguments'];
-      final toolCallId = toolCall['id'] as String?;
       
       Map<String, dynamic> args;
       if (arguments is Map) {
@@ -261,22 +243,6 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
         args = jsonDecode(arguments) as Map<String, dynamic>;
       } else {
         return [const SizedBox.shrink()];
-      }
-      
-      // 获取该工具的执行结果
-      final allResults = _getToolResults();
-      final result = (toolCallId != null && allResults.containsKey(toolCallId))
-          ? allResults[toolCallId] as Map<String, dynamic>?
-          : null;
-      
-      // 调试日志
-      if (functionName == 'batch_delete_subtasks') {
-        print('[AIToolCallWidget] 🔍 批量删除子步骤 - toolCallId: $toolCallId');
-        print('[AIToolCallWidget] 🔍 allResults keys: ${allResults.keys.toList()}');
-        print('[AIToolCallWidget] 🔍 result: $result');
-        if (result != null) {
-          print('[AIToolCallWidget] 🔍 deletedSubtasks: ${result['deletedSubtasks']}');
-        }
       }
       
       // 批量创建任务
@@ -328,57 +294,6 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
             widgets.add(_buildBatchItem(colorScheme, mutedColor, '${event.title} ($dateStr)'));
           } else {
             widgets.add(_buildBatchItem(colorScheme, mutedColor, '日程 ${i + 1}'));
-          }
-        }
-      }
-      
-      // 批量添加子步骤
-      else if (functionName == 'batch_add_subtasks' && args.containsKey('subtasks')) {
-        final subtasks = args['subtasks'] as List;
-        for (var i = 0; i < subtasks.length; i++) {
-          final subtaskTitle = subtasks[i].toString();
-          widgets.add(_buildBatchItem(colorScheme, mutedColor, subtaskTitle));
-        }
-      }
-      
-      // 批量删除子步骤
-      else if (functionName == 'batch_delete_subtasks' && args.containsKey('subtaskIds')) {
-        final subtaskIds = args['subtaskIds'] as List;
-        
-        // 优先从执行结果中获取删除的子步骤信息
-        if (result != null && result.containsKey('deletedSubtasks')) {
-          final deletedSubtasks = result['deletedSubtasks'] as List;
-          for (var subtask in deletedSubtasks) {
-            // deletedSubtasks 是字符串列表（标题列表）
-            final title = subtask.toString();
-            widgets.add(_buildBatchItem(colorScheme, mutedColor, title));
-          }
-        } else {
-          // 如果没有执行结果，回退到从 Repository 查询（兼容旧数据）
-          final taskId = args['taskId'] as String?;
-          
-          if (taskId != null) {
-            final taskRepository = context.read<TaskListRepository>();
-            final task = taskRepository.getTaskById(taskId);
-            
-            if (task != null) {
-              for (var i = 0; i < subtaskIds.length; i++) {
-                final subtaskId = subtaskIds[i].toString();
-                final subtask = task.subTasks.where((st) => st.id == subtaskId).firstOrNull;
-                final displayText = subtask != null ? subtask.title : '子步骤 ${i + 1}';
-                widgets.add(_buildBatchItem(colorScheme, mutedColor, displayText));
-              }
-            } else {
-              // 任务不存在时，显示序号
-              for (var i = 0; i < subtaskIds.length; i++) {
-                widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
-              }
-            }
-          } else {
-            // 没有taskId时，显示序号
-            for (var i = 0; i < subtaskIds.length; i++) {
-              widgets.add(_buildBatchItem(colorScheme, mutedColor, '子步骤 ${i + 1}'));
-            }
           }
         }
       }
@@ -475,15 +390,6 @@ class _AIToolCallWidgetState extends State<AIToolCallWidget> {
         if (mode == 'work') parts.add('工作模式');
         if (mode == 'rest') parts.add('休息模式');
         if (mode == 'deep') parts.add('深度专注');
-      }
-      
-      // 子步骤相关
-      if (args.containsKey('subtaskTitle')) {
-        parts.add(args['subtaskTitle']);
-      }
-      if (args.containsKey('subtasks') && args['subtasks'] is List) {
-        final count = (args['subtasks'] as List).length;
-        parts.add('$count个子步骤');
       }
       
       // 批量操作相关

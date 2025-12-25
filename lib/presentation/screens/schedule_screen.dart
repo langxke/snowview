@@ -7,10 +7,10 @@ import 'schedule/widgets.dart';
 import 'schedule/day_view.dart';
 import 'schedule/week_view.dart';
 import 'schedule/month_view.dart';
-import 'schedule/event_sidebar.dart';
 import '../../services/calendar_database_service.dart';
 import '../providers/schedule_provider.dart';
-import '../providers/task_list_provider.dart';
+import '../providers/navigation_provider.dart';
+import 'tasks/widgets/task_list_panel.dart';
 
 class ScheduleScreen extends StatefulWidget {
 	const ScheduleScreen({super.key});
@@ -24,8 +24,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	late int _year;
 	late int _month; // 1-12
 	DateTime _selected = DateTime.now();
-	List<CalendarEvent> _events = [];
 	CalendarEvent? _selectedEvent;
+	bool _isResizingChecklist = false;
+	double? _dragWidth;
+	double _resizeStartWidth = 0;
+	double _resizeStartGlobalX = 0;
 	
 	// 数据库服务
 	final CalendarDatabaseService _dbService = CalendarDatabaseService();
@@ -38,14 +41,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		final now = DateTime.now();
 		_year = now.year;
 		_month = now.month;
-		_loadEvents();
-	}
-	
-	// 从数据库加载活动
-	void _loadEvents() {
-		setState(() {
-			_events = _dbService.getAllCalendarEvents();
-		});
 	}
 	
 	// 获取包含任务会话的事件列表
@@ -69,46 +64,70 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
 	@override
 	Widget build(BuildContext context) {
-		return Column(
+		final navigationProvider = context.watch<NavigationProvider>();
+		final leftPanelWidth = _dragWidth ?? navigationProvider.calendarChecklistWidth;
+		final showChecklist = navigationProvider.isCalendarChecklistExpanded;
+		return Row(
 			children: [
-				_buildHeader(context),
-				const Divider(height: 1),
-				Expanded(
-					child: Row(
-						children: [
-							// 左侧边栏：迷你月历 + 活动详情
-							SizedBox(
-								width: 280,
-								child: Column(
-									children: [
-										// 迷你月历
-										SizedBox(
-											height: 325,
-											child: MiniMonthCalendar(
-												date: _selected, 
-												onSelect: _onSelectDate,
-											),
-										),
-										const Divider(height: 1),
-										// 活动侧边栏
-										Expanded(
-											child: EventSidebar(
-												selectedDate: _selected,
-												selectedEvent: _selectedEvent,
-												onAddEvent: () => _openAddEventDialog(
-													_selected,
-													DateTime(_selected.year, _selected.month, _selected.day, DateTime.now().hour + 1),
-												),
-												onEditEvent: _editEvent,
-												onDeleteEvent: _showDeleteEventDialog,
-												onClearSelection: () => setState(() => _selectedEvent = null),
-											),
-										),
-									],
-								),
+				AnimatedContainer(
+					duration: _isResizingChecklist
+						? Duration.zero
+						: const Duration(milliseconds: 220),
+					curve: Curves.easeOutCubic,
+					width: showChecklist ? leftPanelWidth : 0,
+					child: ClipRect(
+						child: OverflowBox(
+							alignment: Alignment.centerLeft,
+							minWidth: 0,
+							maxWidth: leftPanelWidth,
+							child: SizedBox(
+								width: leftPanelWidth,
+								child: TaskListPanel(),
 							),
-							const VerticalDivider(width: 1),
-							// 右侧主视图
+						),
+					),
+				),
+				if (showChecklist)
+					_MouseResizeHandle(
+						onDragStart: (d) {
+							_resizeStartWidth = navigationProvider.calendarChecklistWidth;
+							_resizeStartGlobalX = d.globalPosition.dx;
+							setState(() {
+								_isResizingChecklist = true;
+								_dragWidth = _resizeStartWidth;
+							});
+						},
+						onDragUpdate: (d) {
+							final dx = d.globalPosition.dx - _resizeStartGlobalX;
+							final raw = _resizeStartWidth + dx;
+							final maxByWindow = MediaQuery.of(context).size.width * 0.6;
+							final maxWidth = maxByWindow < NavigationProvider.calendarChecklistMaxWidth
+								? maxByWindow
+								: NavigationProvider.calendarChecklistMaxWidth;
+							final clamped = raw.clamp(
+								NavigationProvider.calendarChecklistMinWidth,
+								maxWidth,
+							);
+							setState(() {
+								_dragWidth = clamped.toDouble();
+							});
+						},
+						onDragEnd: (_) {
+							final finalWidth = _dragWidth;
+							if (finalWidth != null) {
+								navigationProvider.setCalendarChecklistWidth(finalWidth);
+							}
+							setState(() {
+								_dragWidth = null;
+								_isResizingChecklist = false;
+							});
+						},
+					),
+				Expanded(
+					child: Column(
+						children: [
+							_buildHeader(context),
+							const Divider(height: 1),
 							Expanded(child: _buildMainCalendarArea(context)),
 						],
 					),
@@ -121,6 +140,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		final years = List<int>.generate(
 			_yearRange * 2 + 1, (i) => DateTime.now().year - _yearRange + i,
 		);
+
 		final months = List<int>.generate(12, (i) => i + 1);
 
 		return Padding(
@@ -205,7 +225,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
 	// 主区域：根据模式切换
 	Widget _buildMainCalendarArea(BuildContext context) {
-		final allEvents = _getAllEvents(context);  // ✅ 获取包含任务会话的事件列表
+		final allEvents = _getAllEvents(context);  
 		
 		switch (_view) {
 			case CalendarView.day:
@@ -238,15 +258,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 		}
 	}
 
-	void _onSelectDate(DateTime d) {
-		setState(() {
-			_selected = d;
-			_year = d.year;
-			_month = d.month;
-			_selectedEvent = null; // 切换日期时清除选中的活动
-		});
-	}
-
 	void _goToday() {
 		final now = DateTime.now();
 		setState(() {
@@ -259,7 +270,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	// 添加活动
 	Future<void> _addEvent(CalendarEvent event) async {
 		await _dbService.addEventFromCalendarEvent(event);
-		_loadEvents();
 		// 刷新视图
 		if (mounted) {
 			context.read<ScheduleProvider>().refresh();
@@ -268,54 +278,17 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	
 	// 更新活动
 	Future<void> _updateEvent(CalendarEvent oldEvent, CalendarEvent newEvent) async {
-		// ✅ 使用字段判断类型
-		if (oldEvent.isTaskSession && oldEvent.taskSessionId != null) {
-			// 这是工作会话，更新工作会话
-			final taskProvider = context.read<TaskListProvider>();
-			
-			// 通过 sessionId 找到对应的会话
-			bool updated = false;
-			for (final task in taskProvider.tasks) {
-				final sessions = taskProvider.getTaskSessions(task.id);
-				for (final session in sessions) {
-					if (session.id == oldEvent.taskSessionId) {
-						final updatedSession = session.copyWith(
-							startTime: newEvent.start,
-							endTime: newEvent.end,
-						);
-						await taskProvider.updateWorkSession(updatedSession);
-						updated = true;
-						break;
-					}
+		final eventId = _dbService.findEventId(oldEvent);
+		if (eventId != null) {
+			await _dbService.updateEventById(eventId, newEvent);
+			setState(() {
+				if (_selectedEvent?.id == oldEvent.id) {
+					_selectedEvent = newEvent;
 				}
-				if (updated) break;
-			}
+			});
 			
-			// 刷新视图
 			if (mounted) {
 				context.read<ScheduleProvider>().refresh();
-			}
-		} else {
-			// 这是日历事件
-			final eventId = _dbService.findEventId(oldEvent);
-			if (eventId != null) {
-				await _dbService.updateEventById(eventId, newEvent);
-				
-				// 直接更新本地事件列表
-				setState(() {
-					final index = _events.indexWhere((e) => e.id == oldEvent.id);
-					if (index != -1) {
-						_events[index] = newEvent;
-					}
-					if (_selectedEvent?.id == oldEvent.id) {
-						_selectedEvent = newEvent;
-					}
-				});
-				
-				// 刷新视图
-				if (mounted) {
-					context.read<ScheduleProvider>().refresh();
-				}
 			}
 		}
 	}
@@ -323,35 +296,15 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 	// 删除活动
 	Future<void> _deleteEvent(CalendarEvent event) async {
 		try {
-			// ✅ 使用字段判断类型
-			if (event.isTaskSession && event.taskSessionId != null) {
-				// 这是工作会话，删除工作会话
-				final taskProvider = context.read<TaskListProvider>();
-				await taskProvider.deleteWorkSession(event.taskSessionId!);
-				
-				if (_selectedEvent == event) {
-					_selectedEvent = null;
-				}
-				
-				// 刷新视图
-				if (mounted) {
-					context.read<ScheduleProvider>().refresh();
-				}
-			} else {
-				// 这是日历事件
-				await _dbService.deleteEventByCalendarEvent(event);
-				if (_selectedEvent == event) {
-					_selectedEvent = null;
-				}
-				_loadEvents();
-				
-				// 刷新视图
-				if (mounted) {
-					context.read<ScheduleProvider>().refresh();
-				}
+			await _dbService.deleteEventByCalendarEvent(event);
+			if (_selectedEvent == event) {
+				_selectedEvent = null;
+			}
+			
+			if (mounted) {
+				context.read<ScheduleProvider>().refresh();
 			}
 		} catch (e) {
-			// 如果删除失败，显示错误信息
 			if (mounted) {
 				ScaffoldMessenger.of(context).showSnackBar(
 					SnackBar(content: Text('删除失败: $e')),
@@ -432,36 +385,33 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 			_selected = DateTime(_year, _month, safeDay);
 		});
 	}
+}
 
+class _MouseResizeHandle extends StatelessWidget {
+	final ValueChanged<DragStartDetails>? onDragStart;
+	final ValueChanged<DragUpdateDetails>? onDragUpdate;
+	final ValueChanged<DragEndDetails>? onDragEnd;
+	const _MouseResizeHandle({this.onDragStart, this.onDragUpdate, this.onDragEnd});
 
-	void _editEvent(CalendarEvent updatedEvent) async {
-		if (_selectedEvent != null) {
-			await _updateEvent(_selectedEvent!, updatedEvent);
-		}
-	}
-
-	void _showDeleteEventDialog(CalendarEvent event) {
-		showDialog(
-			context: context,
-			builder: (context) => AlertDialog(
-				title: const Text('删除活动'),
-				content: Text('确定要删除活动"${event.title}"吗？'),
-				actions: [
-					TextButton(
-						onPressed: () => Navigator.of(context).pop(),
-						child: const Text('取消'),
-					),
-					TextButton(
-						onPressed: () async {
-							Navigator.of(context).pop();
-							await _deleteEvent(event);
-						},
-						style: TextButton.styleFrom(
-							foregroundColor: Theme.of(context).colorScheme.error,
+	@override
+	Widget build(BuildContext context) {
+		return MouseRegion(
+			cursor: SystemMouseCursors.resizeLeftRight,
+			child: GestureDetector(
+				behavior: HitTestBehavior.opaque,
+				onHorizontalDragStart: (d) => onDragStart?.call(d),
+				onHorizontalDragUpdate: (d) => onDragUpdate?.call(d),
+				onHorizontalDragEnd: (d) => onDragEnd?.call(d),
+				child: SizedBox(
+					width: 8,
+					child: Center(
+						child: VerticalDivider(
+							width: 1,
+							thickness: 1,
+							color: Theme.of(context).dividerColor,
 						),
-						child: const Text('删除'),
 					),
-				],
+				),
 			),
 		);
 	}

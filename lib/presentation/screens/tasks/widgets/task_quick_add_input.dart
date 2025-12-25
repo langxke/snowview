@@ -51,38 +51,34 @@ class _TaskQuickAddInputState extends State<TaskQuickAddInput> {
         ),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: TextField(
               controller: _controller,
               focusNode: _focusNode,
               decoration: InputDecoration(
-                hintText: widget.hintText ?? '+ 新建任务...',
+                hintText: widget.hintText ?? '添加任务',
                 border: const OutlineInputBorder(),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 12,
                   vertical: 12,
                 ),
-                prefixIcon: Icon(
-                  Icons.add_circle_outline,
-                  color: Theme.of(context).colorScheme.primary,
+                prefixIcon: Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 12, end: 8),
+                  child: Text(
+                    '+',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
                 ),
+                prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
               ),
               textInputAction: TextInputAction.done,
               onSubmitted: (_) => _handleSubmit(),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            height: 48, // 确保与输入框高度一致
-            child: FilledButton.icon(
-              onPressed: _handleSubmit,
-              icon: const Icon(Icons.send, size: 16),
-              label: const Text('添加'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              ),
             ),
           ),
         ],

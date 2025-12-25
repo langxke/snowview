@@ -18,10 +18,6 @@ class AIToolMetadata {
   static const taskDelete = 'delete_task';
   static const taskBatchDelete = 'batch_delete_tasks';
   static const taskQuery = 'query_tasks';
-  static const taskAddSubtask = 'add_subtask';
-  static const taskBatchAddSubtasks = 'batch_add_subtasks';
-  static const taskDeleteSubtask = 'delete_subtask';
-  static const taskBatchDeleteSubtasks = 'batch_delete_subtasks';
   
   // 日历管理
   static const calendarCreate = 'create_calendar_event';
@@ -68,10 +64,6 @@ class AIToolMetadata {
                 'type': 'string',
                 'description': '任务标题',
               },
-              'categoryId': {
-                'type': 'string',
-                'description': '类别ID，需要从系统状态中获取可用类别',
-              },
               'dueDate': {
                 'type': 'string',
                 'description': '截止日期，ISO 8601格式（如：2025-10-08T14:30:00）',
@@ -81,7 +73,7 @@ class AIToolMetadata {
                 'description': '任务描述或备注',
               },
             },
-            'required': ['title', 'categoryId'],
+            'required': ['title'],
           },
         ),
       ),
@@ -110,10 +102,6 @@ class AIToolMetadata {
                       'type': 'string',
                       'description': '任务标题',
                     },
-                    'categoryId': {
-                      'type': 'string',
-                      'description': '类别ID',
-                    },
                     'dueDate': {
                       'type': 'string',
                       'description': '截止日期，ISO 8601格式',
@@ -123,7 +111,7 @@ class AIToolMetadata {
                       'description': '任务描述',
                     },
                   },
-                  'required': ['title', 'categoryId'],
+                  'required': ['title'],
                 },
               },
             },
@@ -247,13 +235,13 @@ class AIToolMetadata {
     ToolMetadata(
       name: taskQuery,
       displayName: '查询任务',
-      description: '查询任务列表',
+      description: '查询任务列表。返回结果包含任务的基本信息（id、title、isCompleted、dueDate）。',
       category: ToolCategory.task,
       openAIToolDefinition: OpenAITool(
         type: 'function',
         function: OpenAIFunction(
           name: taskQuery,
-          description: '查询任务列表。返回结果包含任务的基本信息（id、title、isCompleted、dueDate、categoryId）以及子任务列表（subTasks，包含每个子任务的 id、title、isCompleted）。如需删除子任务，使用返回的子任务 id。',
+          description: '查询任务列表',
           parametersSchema: {
             'type': 'object',
             'properties': {
@@ -261,135 +249,11 @@ class AIToolMetadata {
                 'type': 'boolean',
                 'description': 'true=已完成, false=未完成, 不传=全部',
               },
-              'categoryId': {
-                'type': 'string',
-                'description': '类别筛选',
-              },
               'limit': {
                 'type': 'integer',
                 'description': '限制返回数量',
               },
             },
-          },
-        ),
-      ),
-    ),
-    
-    ToolMetadata(
-      name: taskAddSubtask,
-      displayName: '添加子步骤',
-      description: '为任务添加子步骤',
-      category: ToolCategory.task,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: taskAddSubtask,
-          description: '为任务添加子步骤',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'taskId': {
-                'type': 'string',
-                'description': '任务ID',
-              },
-              'subtaskTitle': {
-                'type': 'string',
-                'description': '子步骤标题',
-              },
-            },
-            'required': ['taskId', 'subtaskTitle'],
-          },
-        ),
-      ),
-    ),
-    
-    ToolMetadata(
-      name: taskBatchAddSubtasks,
-      displayName: '批量添加子步骤',
-      description: '为任务批量添加多个子步骤',
-      category: ToolCategory.task,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: taskBatchAddSubtasks,
-          description: '为任务批量添加多个子步骤。当需要为一个任务添加多个子步骤时，使用此工具比多次调用add_subtask更高效。',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'taskId': {
-                'type': 'string',
-                'description': '任务ID',
-              },
-              'subtasks': {
-                'type': 'array',
-                'description': '子步骤标题列表',
-                'items': {
-                  'type': 'string',
-                  'description': '子步骤标题',
-                },
-              },
-            },
-            'required': ['taskId', 'subtasks'],
-          },
-        ),
-      ),
-    ),
-    
-    ToolMetadata(
-      name: taskDeleteSubtask,
-      displayName: '删除子步骤',
-      description: '删除任务的子步骤',
-      category: ToolCategory.task,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: taskDeleteSubtask,
-          description: '删除任务的子步骤',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'taskId': {
-                'type': 'string',
-                'description': '任务ID',
-              },
-              'subtaskId': {
-                'type': 'string',
-                'description': '子步骤ID',
-              },
-            },
-            'required': ['taskId', 'subtaskId'],
-          },
-        ),
-      ),
-    ),
-    
-    ToolMetadata(
-      name: taskBatchDeleteSubtasks,
-      displayName: '批量删除子步骤',
-      description: '批量删除任务的多个子步骤',
-      category: ToolCategory.task,
-      openAIToolDefinition: OpenAITool(
-        type: 'function',
-        function: OpenAIFunction(
-          name: taskBatchDeleteSubtasks,
-          description: '批量删除任务的多个子步骤。当需要删除一个任务的多个子步骤时，使用此工具比多次调用delete_subtask更高效。',
-          parametersSchema: {
-            'type': 'object',
-            'properties': {
-              'taskId': {
-                'type': 'string',
-                'description': '任务ID',
-              },
-              'subtaskIds': {
-                'type': 'array',
-                'description': '要删除的子步骤ID列表',
-                'items': {
-                  'type': 'string',
-                  'description': '子步骤ID',
-                },
-              },
-            },
-            'required': ['taskId', 'subtaskIds'],
           },
         ),
       ),

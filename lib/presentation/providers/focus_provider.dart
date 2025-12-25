@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/models/focus_session_hive.dart';
 import '../../data/models/focus_daily_stats_hive.dart';
 import '../../data/repositories/focus_session_repository.dart';
-import '../../data/repositories/work_session_repository.dart';
 import '../../data/repositories/task_list_repository.dart';
 import '../../services/notification_service.dart';
 import '../../services/focus_sound_service.dart';
@@ -13,7 +12,6 @@ import '../../services/focus_sound_service.dart';
 /// 专注功能状态管理
 class FocusProvider extends ChangeNotifier {
   final FocusSessionRepository _repository;
-  final WorkSessionRepository _workSessionRepo = WorkSessionRepository();
   final TaskListRepository _taskRepo = TaskListRepository();
   final NotificationService _notificationService = NotificationService();
   final FocusSoundService _soundService = FocusSoundService();
@@ -198,9 +196,6 @@ class FocusProvider extends ChangeNotifier {
 
     // 更新当天的统计
     await _repository.updateDailyStats(_currentSession!.startTime);
-
-    // 更新关联的工作会话
-    await _updateWorkSession();
 
     // 清空当前会话
     _currentSession = null;
@@ -411,25 +406,6 @@ class FocusProvider extends ChangeNotifier {
     } catch (e) {
       // 通知失败不影响核心功能，只记录日志
       debugPrint('显示通知失败（桌面平台可能不支持）: $e');
-    }
-  }
-
-  /// 更新关联的工作会话
-  Future<void> _updateWorkSession() async {
-    if (_currentSession?.workSessionId == null) return;
-
-    try {
-      final workSession = _workSessionRepo.getSessionById(
-        _currentSession!.workSessionId!,
-      );
-
-      if (workSession != null) {
-        // 更新工作会话状态为已完成
-        final updatedWorkSession = workSession.copyWith(status: 'completed');
-        await _workSessionRepo.updateSession(updatedWorkSession);
-      }
-    } catch (e) {
-      debugPrint('更新工作会话失败: $e');
     }
   }
 

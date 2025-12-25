@@ -20,21 +20,20 @@ class ChecklistTaskHiveAdapter extends TypeAdapter<ChecklistTaskHive> {
       id: fields[0] as String,
       title: fields[1] as String,
       description: fields[2] as String?,
-      categoryId: fields[3] as String,
-      isCompleted: fields[4] as bool,
-      dueDate: fields[5] as DateTime?,
-      remindAt: fields[6] as DateTime?,
-      subTasks: (fields[7] as List).cast<SubTaskHive>(),
-      createdAt: fields[8] as DateTime,
-      completedAt: fields[9] as DateTime?,
-      order: fields[10] as int,
+      isCompleted: fields[3] as bool,
+      dueDate: fields[4] as DateTime?,
+      remindAt: fields[5] as DateTime?,
+      createdAt: fields[6] as DateTime,
+      completedAt: fields[7] as DateTime?,
+      order: fields[8] as int,
+      isLongTerm: fields[9] as bool? ?? false,
     );
   }
 
   @override
   void write(BinaryWriter writer, ChecklistTaskHive obj) {
     writer
-      ..writeByte(11)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -42,21 +41,19 @@ class ChecklistTaskHiveAdapter extends TypeAdapter<ChecklistTaskHive> {
       ..writeByte(2)
       ..write(obj.description)
       ..writeByte(3)
-      ..write(obj.categoryId)
-      ..writeByte(4)
       ..write(obj.isCompleted)
-      ..writeByte(5)
+      ..writeByte(4)
       ..write(obj.dueDate)
-      ..writeByte(6)
+      ..writeByte(5)
       ..write(obj.remindAt)
-      ..writeByte(7)
-      ..write(obj.subTasks)
-      ..writeByte(8)
+      ..writeByte(6)
       ..write(obj.createdAt)
-      ..writeByte(9)
+      ..writeByte(7)
       ..write(obj.completedAt)
-      ..writeByte(10)
-      ..write(obj.order);
+      ..writeByte(8)
+      ..write(obj.order)
+      ..writeByte(9)
+      ..write(obj.isLongTerm);
   }
 
   @override

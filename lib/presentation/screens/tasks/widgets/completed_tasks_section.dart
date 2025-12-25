@@ -1,25 +1,24 @@
 import 'package:flutter/material.dart';
 import '../../../../data/models/checklist_task_hive.dart';
-import '../../../../data/models/task_category_hive.dart';
 import 'task_item.dart';
 
 /// 已完成任务折叠区域
 class CompletedTasksSection extends StatelessWidget {
   final List<ChecklistTaskHive> completedTasks;
-  final List<TaskCategoryHive> categories;
   final String? selectedTaskId;
   final bool isExpanded;
   final Function(String taskId) onTaskTap;
+  final void Function(String taskId, TapDownDetails details)? onTaskSecondaryTapDown;
   final Function(String taskId) onToggleCompletion;
   final VoidCallback onToggleExpanded;
 
   const CompletedTasksSection({
     super.key,
     required this.completedTasks,
-    required this.categories,
-    this.selectedTaskId,
+    required this.selectedTaskId,
     required this.isExpanded,
     required this.onTaskTap,
+    this.onTaskSecondaryTapDown,
     required this.onToggleCompletion,
     required this.onToggleExpanded,
   });
@@ -65,17 +64,14 @@ class CompletedTasksSection extends StatelessWidget {
             padding: const EdgeInsets.all(8.0),
             child: Column(
               children: completedTasks.map((task) {
-                final category = categories.firstWhere(
-                  (c) => c.id == task.categoryId,
-                  orElse: () => categories.first,
-                );
-
                 return TaskItem(
                   task: task,
-                  category: category,
                   isSelected: selectedTaskId == task.id,
                   isCompleted: true,
                   onTap: () => onTaskTap(task.id),
+                  onSecondaryTapDown: onTaskSecondaryTapDown != null
+                      ? (details) => onTaskSecondaryTapDown!(task.id, details)
+                      : null,
                   onToggleCompletion: () => onToggleCompletion(task.id),
                 );
               }).toList(),

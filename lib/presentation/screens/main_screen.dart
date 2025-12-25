@@ -24,7 +24,7 @@ class _MainScreenState extends State<MainScreen> {
   final _sectionStackKey = GlobalKey();
 
   // 右侧 AI 面板是否显示
-  bool _showAI = true;
+  bool _showAI = false;
 
   // AI 面板宽度比例
   double _aiRatio = 1 / 3;
@@ -55,26 +55,48 @@ class _MainScreenState extends State<MainScreen> {
                         minWidth: 56,
                         selectedIndex: navigationProvider.currentIndex,
                         onDestinationSelected: (i) {
+                          if (i == 0) {
+                            if (navigationProvider.currentIndex == 1) {
+                              navigationProvider.toggleCalendarChecklist();
+                              return;
+                            }
+
+                            // 从其他页面点击“清单”：跳转到日历页并展开左侧清单
+                            navigationProvider.navigateTo(1);
+                            navigationProvider.toggleCalendarChecklist();
+                            return;
+                          }
+
                           navigationProvider.navigateTo(i);
                         },
                         labelType: NavigationRailLabelType.all,
-                        destinations: const [
+                        destinations: [
                           NavigationRailDestination(
-                            icon: Icon(Icons.list_alt_outlined),
-                            selectedIcon: Icon(Icons.list_alt),
-                            label: Text('清单'),
+                            icon: Icon(
+                              navigationProvider.currentIndex == 1 &&
+                                      navigationProvider.isCalendarChecklistExpanded
+                                  ? Icons.arrow_back
+                                  : Icons.list_alt_outlined,
+                            ),
+                            selectedIcon: Icon(
+                              navigationProvider.currentIndex == 1 &&
+                                      navigationProvider.isCalendarChecklistExpanded
+                                  ? Icons.arrow_back
+                                  : Icons.list_alt,
+                            ),
+                            label: const Text('清单'),
                           ),
-                          NavigationRailDestination(
+                          const NavigationRailDestination(
                             icon: Icon(Icons.calendar_today_outlined),
                             selectedIcon: Icon(Icons.calendar_today),
                             label: Text('日历'),
                           ),
-                          NavigationRailDestination(
+                          const NavigationRailDestination(
                             icon: Icon(Icons.timer_outlined),
                             selectedIcon: Icon(Icons.timer),
                             label: Text('专注'),
                           ),
-                          NavigationRailDestination(
+                          const NavigationRailDestination(
                             icon: Icon(Icons.settings_outlined),
                             selectedIcon: Icon(Icons.settings),
                             label: Text('设置'),

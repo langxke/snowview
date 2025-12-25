@@ -420,8 +420,6 @@ class _AddEventDialogState extends State<AddEventDialog> {
 						color: color,
 						start: s,
 						end: e,
-						isTaskSession: false,  // ✅ 新建的都是普通事件
-						taskSessionId: null,
 					);
 					
 					Navigator.pop(context, event);
@@ -638,8 +636,6 @@ class _DayViewAddEventDialogState extends State<DayViewAddEventDialog> {
 						color: color,
 						start: s,
 						end: e,
-						isTaskSession: false,  // ✅ 新建的都是普通事件
-						taskSessionId: null,
 					);
 					
 					Navigator.pop(context, event);

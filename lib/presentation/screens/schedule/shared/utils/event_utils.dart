@@ -93,8 +93,6 @@ class EventUtils {
         color: Colors.blue, // 默认颜色
         start: startTime,
         end: endTime,
-        isTaskSession: false,  // ✅ 从剪贴板粘贴的是普通事件
-        taskSessionId: null,
       );
       
       onAddEvent(newEvent);
@@ -128,8 +126,6 @@ class EventUtils {
       color: event.color,
       start: event.start.add(Duration(hours: hourOffset)),
       end: event.end.add(Duration(hours: hourOffset)),
-      isTaskSession: false,  // 副本总是普通事件
-      taskSessionId: null,
     );
     
     onAddEvent(newEvent);

@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../../data/models/checklist_task_hive.dart';
-import '../../../../data/models/task_category_hive.dart';
 import '../../../providers/task_list_provider.dart';
-import '../../../providers/focus_provider.dart';
-import '../../../providers/navigation_provider.dart';
 import 'task_item.dart';
 import 'task_quick_add_input.dart';
 import 'completed_tasks_section.dart';
+
+enum _TaskContextAction {
+  rename,
+  scheduleToday,
+  markLongTerm,
+  markCompleted,
+  delete,
+}
 
 /// 中间任务列表面板
 class TaskListPanel extends StatelessWidget {
@@ -20,24 +25,10 @@ class TaskListPanel extends StatelessWidget {
         final uncompletedTasks = provider.uncompletedTasks;
         final completedTasks = provider.completedTasks;
 
-        // 获取当前类别名称
-        String categoryName = '全部';
-        if (provider.selectedCategoryId != null &&
-            provider.selectedCategoryId != 'all') {
-          try {
-            final category = provider.categories.firstWhere(
-              (c) => c.id == provider.selectedCategoryId,
-            );
-            categoryName = category.name;
-          } catch (e) {
-            categoryName = '全部';
-          }
-        }
-
         return Column(
           children: [
             // 头部
-            _buildHeader(context, categoryName, uncompletedTasks.length),
+            _buildHeader(context, uncompletedTasks.length),
 
             // 任务列表
             Expanded(
@@ -57,7 +48,7 @@ class TaskListPanel extends StatelessWidget {
   }
 
   /// 构建头部
-  Widget _buildHeader(BuildContext context, String categoryName, int uncompletedCount) {
+  Widget _buildHeader(BuildContext context, int uncompletedCount) {
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
@@ -72,7 +63,7 @@ class TaskListPanel extends StatelessWidget {
         children: [
           Flexible(
             child: Text(
-              categoryName,
+              '清单',
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -144,26 +135,19 @@ class TaskListPanel extends StatelessWidget {
         // 未完成任务列表
         if (uncompletedTasks.isNotEmpty) ...[
           ...uncompletedTasks.map((task) {
-            // 查找任务所属类别，如果找不到则返回 null
-            TaskCategoryHive? category;
-            try {
-              category = provider.categories.firstWhere(
-                (c) => c.id == task.categoryId,
-              );
-            } catch (e) {
-              // 如果找不到类别，使用 null（TaskItem 会处理）
-              category = null;
-            }
-
             return TaskItem(
               key: ValueKey(task.id),
               task: task,
-              category: category,
               isSelected: provider.selectedTaskId == task.id,
               isCompleted: false,
-              onTap: () => provider.selectTask(task.id),
+              onTap: () => provider.toggleNoteEditor(task.id),
+              onSecondaryTapDown: (details) => _showTaskContextMenu(
+                context,
+                provider: provider,
+                task: task as ChecklistTaskHive,
+                position: details.globalPosition,
+              ),
               onToggleCompletion: () => provider.toggleTaskCompletion(task.id),
-              onStartFocus: () => _startFocusForTask(context, task.id),
             );
           }),
         ],
@@ -171,10 +155,20 @@ class TaskListPanel extends StatelessWidget {
         // 已完成任务折叠区
         CompletedTasksSection(
           completedTasks: completedTasks.cast<ChecklistTaskHive>(),
-          categories: provider.categories,
           selectedTaskId: provider.selectedTaskId,
           isExpanded: provider.isCompletedTasksExpanded,
-          onTaskTap: (taskId) => provider.selectTask(taskId),
+          onTaskTap: (taskId) => provider.toggleNoteEditor(taskId),
+          onTaskSecondaryTapDown: (taskId, details) {
+            final task = completedTasks
+                .cast<ChecklistTaskHive>()
+                .firstWhere((t) => t.id == taskId);
+            _showTaskContextMenu(
+              context,
+              provider: provider,
+              task: task,
+              position: details.globalPosition,
+            );
+          },
           onToggleCompletion: (taskId) => provider.toggleTaskCompletion(taskId),
           onToggleExpanded: provider.toggleCompletedTasksExpanded,
         ),
@@ -182,155 +176,123 @@ class TaskListPanel extends StatelessWidget {
     );
   }
 
-  /// 处理添加任务
-  void _handleAddTask(TaskListProvider provider, String title) {
-    // 获取当前选中的类别ID，如果是"全部"则使用第一个类别
-    String categoryId = provider.selectedCategoryId ?? 'work';
-    if (categoryId == 'all') {
-      categoryId = provider.categories.isNotEmpty
-          ? provider.categories.first.id
-          : 'work';
-    }
-
-    provider.createTask(
-      title: title,
-      categoryId: categoryId,
-    );
-  }
-
-  /// 开始任务专注
-  Future<void> _startFocusForTask(BuildContext context, String taskId) async {
-    final focusProvider = context.read<FocusProvider>();
-    
-    // 检查是否已有活动会话
-    if (focusProvider.isActive) {
-      await _handleFocusConflict(context, focusProvider, taskId: taskId);
-      return;
-    }
-    
-    // 直接开始专注
-    try {
-      await focusProvider.startPomodoro(taskId: taskId);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('已开始专注，祝您高效工作！'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('启动失败：${e.toString()}'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
-    }
-  }
-
-  /// 处理专注会话冲突
-  Future<void> _handleFocusConflict(
-    BuildContext context,
-    FocusProvider focusProvider, {
-    String? taskId,
+  Future<void> _showTaskContextMenu(
+    BuildContext context, {
+    required TaskListProvider provider,
+    required ChecklistTaskHive task,
+    required Offset position,
   }) async {
-    // 显示友好的提示对话框
-    final result = await showDialog<String>(
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<_TaskContextAction>(
       context: context,
-      builder: (context) => AlertDialog(
-        icon: Icon(
-          Icons.timer,
-          color: Theme.of(context).colorScheme.primary,
-          size: 48,
-        ),
-        title: const Text('当前有专注进行中'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '您已有一个专注会话正在进行中：',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    focusProvider.isPaused ? Icons.pause_circle : Icons.timer,
-                    color: Theme.of(context).colorScheme.primary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      '剩余时间：${focusProvider.formattedTime}',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          TextButton.icon(
-            onPressed: () => Navigator.of(context).pop('view_current'),
-            icon: const Icon(Icons.visibility_outlined),
-            label: const Text('查看当前专注'),
-          ),
-          FilledButton.icon(
-            onPressed: () => Navigator.of(context).pop('cancel_and_start'),
-            icon: const Icon(Icons.refresh),
-            label: const Text('开始新专注'),
-          ),
-        ],
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
       ),
+      items: [
+        const PopupMenuItem<_TaskContextAction>(
+          value: _TaskContextAction.rename,
+          child: Row(
+            children: [
+              Icon(Icons.edit_outlined, size: 18),
+              SizedBox(width: 8),
+              Text('重命名'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<_TaskContextAction>(
+          value: _TaskContextAction.scheduleToday,
+          child: const Row(
+            children: [
+              Text('📅  '),
+              Text('安排到今天'),
+            ],
+          ),
+        ),
+        PopupMenuItem<_TaskContextAction>(
+          value: _TaskContextAction.markLongTerm,
+          child: Row(
+            children: [
+              const Text('📌  '),
+              const Text('标记为长期任务'),
+            ],
+          ),
+        ),
+        PopupMenuItem<_TaskContextAction>(
+          value: _TaskContextAction.markCompleted,
+          enabled: !task.isCompleted,
+          child: Row(
+            children: [
+              const Text('✅  '),
+              const Text('标记为完成'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<_TaskContextAction>(
+          value: _TaskContextAction.delete,
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 18),
+              SizedBox(width: 8),
+              Text('删除任务'),
+            ],
+          ),
+        ),
+      ],
     );
 
     if (!context.mounted) return;
+    if (selected == null) return;
 
-    if (result == 'view_current') {
-      // 切换到专注页面（就像用户点击导航栏一样）
-      context.read<NavigationProvider>().navigateToFocus();
-    } else if (result == 'cancel_and_start') {
-      // 取消当前会话并开始新的
-      await focusProvider.cancelCurrentSession();
-      
-      try {
-        await focusProvider.startPomodoro(taskId: taskId);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('已开始新的专注会话'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+    switch (selected) {
+      case _TaskContextAction.rename:
+        provider.startRenaming(task.id);
+        break;
+      case _TaskContextAction.scheduleToday:
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        await provider.updateTask(id: task.id, dueDate: today);
+        break;
+      case _TaskContextAction.markLongTerm:
+        await provider.updateTask(id: task.id, isLongTerm: !task.isLongTerm);
+        break;
+      case _TaskContextAction.markCompleted:
+        await provider.toggleTaskCompletion(task.id);
+        break;
+      case _TaskContextAction.delete:
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('删除任务？'),
+            content: Text('将删除「${task.title}」'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('删除'),
+              ),
+            ],
+          ),
+        );
+        if (!context.mounted) return;
+        if (confirm == true && context.mounted) {
+          await provider.deleteTask(task.id);
         }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('启动失败：${e.toString()}'),
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-          );
-        }
-      }
+        break;
     }
+  }
+
+  /// 处理添加任务
+  void _handleAddTask(TaskListProvider provider, String title) {
+    provider.createTask(
+      title: title,
+    );
   }
 }
