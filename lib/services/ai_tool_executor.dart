@@ -755,10 +755,6 @@ class AIToolExecutor {
       // 根据会话类型启动相应的专注会话
       switch (sessionType) {
         case 'pomodoro':
-          await focusProvider.startPomodoro(
-            taskId: taskId,
-          );
-          break;
         case 'custom':
           await focusProvider.startCustomSession(
             duration,
@@ -766,7 +762,11 @@ class AIToolExecutor {
           );
           break;
         case 'break':
-          await focusProvider.startBreak(duration);
+          await focusProvider.startFocusSession(
+            durationMinutes: duration,
+            sessionType: 'break',
+            isBreak: true,
+          );
           break;
         default:
           // 默认启动自定义会话

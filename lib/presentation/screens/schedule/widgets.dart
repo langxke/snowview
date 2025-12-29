@@ -174,6 +174,7 @@ class DayCell extends StatelessWidget {
 	final bool inCurrentMonth;
 	final bool isSelected;
 	final List<CalendarEvent> events;
+	final List<String> todos;
 	const DayCell({
 		super.key,
 		required this.index,
@@ -182,12 +183,15 @@ class DayCell extends StatelessWidget {
 		required this.date,
 		required this.inCurrentMonth,
 		this.isSelected = false,
-		this.events = const []
+		this.events = const [],
+		this.todos = const [],
 	});
 
 	@override
 	Widget build(BuildContext context) {
 		final theme = Theme.of(context);
+		final allDayTasks = events.where((e) => e.allDay).toList(growable: false);
+		final timedEvents = events.where((e) => !e.allDay).toList(growable: false);
 		final textColor = inCurrentMonth
 			? theme.colorScheme.onSurface
 			: theme.textTheme.bodyMedium?.color?.withOpacity(0.4);
@@ -221,8 +225,19 @@ class DayCell extends StatelessWidget {
 						],
 					),
 					const SizedBox(height: 6),
-					// 自适应高度的事件列表
-					Expanded(child: EventList(events: events)),
+					if (allDayTasks.isNotEmpty) ...[
+						...allDayTasks.take(2).map((e) => EventPill(title: e.title, color: theme.colorScheme.primary)),
+						if (allDayTasks.length > 2)
+							Text('任务+${allDayTasks.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+						const SizedBox(height: 4),
+					],
+					if (todos.isNotEmpty) ...[
+						...todos.take(2).map((t) => EventPill(title: t, color: theme.colorScheme.secondary)),
+						if (todos.length > 2)
+							Text('待办+${todos.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+						const SizedBox(height: 4),
+					],
+					Expanded(child: EventList(events: timedEvents)),
 				],
 			),
 		);

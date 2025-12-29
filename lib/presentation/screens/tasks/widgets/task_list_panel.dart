@@ -22,7 +22,8 @@ class TaskListPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<TaskListProvider>(
       builder: (context, provider, child) {
-        final uncompletedTasks = provider.uncompletedTasks;
+        final scheduledTasks = provider.scheduledUncompletedTasks;
+        final uncompletedTasks = provider.unscheduledUncompletedTasks;
         final completedTasks = provider.completedTasks;
 
         return Column(
@@ -32,9 +33,9 @@ class TaskListPanel extends StatelessWidget {
 
             // 任务列表
             Expanded(
-              child: uncompletedTasks.isEmpty && completedTasks.isEmpty
+              child: uncompletedTasks.isEmpty && scheduledTasks.isEmpty && completedTasks.isEmpty
                   ? _buildEmptyState(context)
-                  : _buildTaskList(context, provider, uncompletedTasks, completedTasks),
+                  : _buildTaskList(context, provider, uncompletedTasks, scheduledTasks, completedTasks),
             ),
 
             // 底部快速添加
@@ -127,29 +128,62 @@ class TaskListPanel extends StatelessWidget {
     BuildContext context,
     TaskListProvider provider,
     List<dynamic> uncompletedTasks,
+    List<dynamic> scheduledTasks,
     List<dynamic> completedTasks,
   ) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // 未完成任务列表
         if (uncompletedTasks.isNotEmpty) ...[
-          ...uncompletedTasks.map((task) {
-            return TaskItem(
-              key: ValueKey(task.id),
-              task: task,
-              isSelected: provider.selectedTaskId == task.id,
-              isCompleted: false,
-              onTap: () => provider.toggleNoteEditor(task.id),
-              onSecondaryTapDown: (details) => _showTaskContextMenu(
-                context,
-                provider: provider,
-                task: task as ChecklistTaskHive,
-                position: details.globalPosition,
-              ),
-              onToggleCompletion: () => provider.toggleTaskCompletion(task.id),
-            );
-          }),
+          _ScheduledHeader(
+            title: '未安排任务',
+            count: uncompletedTasks.length,
+            expanded: provider.isUnscheduledTasksExpanded,
+            onToggle: provider.toggleUnscheduledTasksExpanded,
+          ),
+          if (provider.isUnscheduledTasksExpanded)
+            ...uncompletedTasks.map((task) {
+              return TaskItem(
+                key: ValueKey(task.id),
+                task: task,
+                isSelected: provider.selectedTaskId == task.id,
+                isCompleted: false,
+                onTap: () => provider.toggleNoteEditor(task.id),
+                onSecondaryTapDown: (details) => _showTaskContextMenu(
+                  context,
+                  provider: provider,
+                  task: task as ChecklistTaskHive,
+                  position: details.globalPosition,
+                ),
+                onToggleCompletion: () => provider.toggleTaskCompletion(task.id),
+              );
+            }),
+        ],
+
+        if (scheduledTasks.isNotEmpty) ...[
+          _ScheduledHeader(
+            title: '已安排任务',
+            count: scheduledTasks.length,
+            expanded: provider.isScheduledTasksExpanded,
+            onToggle: provider.toggleScheduledTasksExpanded,
+          ),
+          if (provider.isScheduledTasksExpanded)
+            ...scheduledTasks.map((task) {
+              return TaskItem(
+                key: ValueKey(task.id),
+                task: task,
+                isSelected: provider.selectedTaskId == task.id,
+                isCompleted: false,
+                onTap: () => provider.toggleNoteEditor(task.id),
+                onSecondaryTapDown: (details) => _showTaskContextMenu(
+                  context,
+                  provider: provider,
+                  task: task as ChecklistTaskHive,
+                  position: details.globalPosition,
+                ),
+                onToggleCompletion: () => provider.toggleTaskCompletion(task.id),
+              );
+            }),
         ],
 
         // 已完成任务折叠区
@@ -293,6 +327,54 @@ class TaskListPanel extends StatelessWidget {
   void _handleAddTask(TaskListProvider provider, String title) {
     provider.createTask(
       title: title,
+    );
+  }
+}
+
+class _ScheduledHeader extends StatelessWidget {
+  final String title;
+  final int count;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  const _ScheduledHeader({
+    required this.title,
+    required this.count,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final titleStyle = Theme.of(context).textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+        );
+
+    final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+        );
+
+    return InkWell(
+      onTap: onToggle,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(expanded ? Icons.expand_more : Icons.chevron_right, size: 20),
+            const SizedBox(width: 6),
+            Text(title, style: titleStyle),
+            const SizedBox(width: 8),
+            Text('$count', style: subtitleStyle),
+            const Spacer(),
+            Icon(
+              Icons.event_available_outlined,
+              size: 18,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

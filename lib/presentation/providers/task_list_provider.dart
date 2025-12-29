@@ -12,6 +12,8 @@ class TaskListProvider extends ChangeNotifier {
   String? _renamingTaskId;
   String? _expandedNoteTaskId;
   bool _isCompletedTasksExpanded = false; // 已完成任务是否展开
+  bool _isUnscheduledTasksExpanded = true;
+  bool _isScheduledTasksExpanded = true;
   
   TaskListProvider(this._repository) {
     _loadData();
@@ -46,6 +48,20 @@ class TaskListProvider extends ChangeNotifier {
     return _tasks.where((t) => !t.isCompleted).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt)); // 按创建时间倒序
   }
+
+  List<ChecklistTaskHive> get scheduledUncompletedTasks {
+    return _tasks
+        .where((t) => !t.isCompleted && t.dueDate != null)
+        .toList()
+      ..sort((a, b) => (a.dueDate!).compareTo(b.dueDate!));
+  }
+
+  List<ChecklistTaskHive> get unscheduledUncompletedTasks {
+    return _tasks
+        .where((t) => !t.isCompleted && t.dueDate == null)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
   
   /// 获取已完成的任务
   List<ChecklistTaskHive> get completedTasks {
@@ -58,10 +74,24 @@ class TaskListProvider extends ChangeNotifier {
   
   /// 已完成任务是否展开
   bool get isCompletedTasksExpanded => _isCompletedTasksExpanded;
+
+  bool get isUnscheduledTasksExpanded => _isUnscheduledTasksExpanded;
+
+  bool get isScheduledTasksExpanded => _isScheduledTasksExpanded;
   
   /// 切换已完成任务展开状态
   void toggleCompletedTasksExpanded() {
     _isCompletedTasksExpanded = !_isCompletedTasksExpanded;
+    notifyListeners();
+  }
+
+  void toggleUnscheduledTasksExpanded() {
+    _isUnscheduledTasksExpanded = !_isUnscheduledTasksExpanded;
+    notifyListeners();
+  }
+
+  void toggleScheduledTasksExpanded() {
+    _isScheduledTasksExpanded = !_isScheduledTasksExpanded;
     notifyListeners();
   }
   

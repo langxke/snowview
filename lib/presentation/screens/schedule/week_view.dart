@@ -1,5 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -11,6 +13,8 @@ import 'shared/handlers/event_move_handler.dart';
 import 'shared/handlers/time_selection_handler.dart';
 import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
+import '../../providers/task_list_provider.dart';
+import 'day_week_ai_scheduler.dart';
 
 class WeekView extends StatefulWidget {
 	final DateTime centerDate;
@@ -36,6 +40,10 @@ class WeekView extends StatefulWidget {
 }
 
 class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGestureMixin {
+	bool _isTodayTasksExpanded = true;
+	bool _isTodayTodosExpanded = true;
+	Timer? _nowTimer;
+	DateTime _now = DateTime.now();
 
 	// ============ 实现 CalendarGestureMixin 的抽象方法 ============
 	
@@ -90,7 +98,9 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 		if (!TimeSelectionHandler.isValidSelection(
 			startQuarter: selectedStartQuarter,
 			endQuarter: selectedEndQuarter,
-		) || selectedColumn == null) return;
+		) || selectedColumn == null) {
+			return;
+		}
 		
 		final days = _weekDays(widget.centerDate);
 		final selectedDay = days[selectedColumn!];
@@ -156,6 +166,95 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 			targetColumnIndex: targetColumn,
 		);
 	}
+
+	void _startNowTimer() {
+		_nowTimer?.cancel();
+		final now = DateTime.now();
+		final nextMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute)
+			.add(const Duration(minutes: 1));
+		final delay = nextMinute.difference(now);
+		_nowTimer = Timer(delay, () {
+			if (!mounted) return;
+			setState(() => _now = DateTime.now());
+			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+				if (!mounted) return;
+				setState(() => _now = DateTime.now());
+			});
+		});
+	}
+
+	List<Widget> _buildNowIndicator(
+		List<DateTime> days,
+		BoxConstraints constraints, {
+		required int todayIndex,
+	}) {
+		final y = TimeUtils.timeToY(_now);
+		final hh = _now.hour.toString().padLeft(2, '0');
+		final mm = _now.minute.toString().padLeft(2, '0');
+		final timeText = '$hh:$mm';
+
+		final showLines = todayIndex >= 0;
+		final availableWidth = constraints.maxWidth - CalendarConstants.gutterWidth;
+		final columnWidth = availableWidth / 7;
+		final todayLeft = CalendarConstants.gutterWidth + todayIndex * columnWidth;
+
+		final widgets = <Widget>[
+			// 时间标签：不管是不是本周都显示
+			Positioned(
+				top: y - 9,
+				left: 0,
+				width: CalendarConstants.gutterWidth,
+				child: IgnorePointer(
+					child: Align(
+						alignment: Alignment.centerRight,
+						child: Container(
+							padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+							decoration: BoxDecoration(
+								color: Colors.red,
+								borderRadius: BorderRadius.circular(4),
+							),
+							child: Text(
+								timeText,
+								style: const TextStyle(
+									color: Colors.white,
+									fontSize: 11,
+									fontWeight: FontWeight.w600,
+								),
+							),
+						),
+					),
+				),
+			),
+		];
+
+		if (showLines) {
+			// 贯穿全周的细红线
+			widgets.add(
+				Positioned(
+					top: y,
+					left: CalendarConstants.gutterWidth,
+					right: 0,
+					child: IgnorePointer(
+						child: Container(height: 1.5, color: Colors.red),
+					),
+				),
+			);
+
+			// 今天列范围内更粗一点
+			widgets.add(
+				Positioned(
+					top: y,
+					left: todayLeft,
+					width: columnWidth,
+					child: IgnorePointer(
+						child: Container(height: 3, color: Colors.red),
+					),
+				),
+			);
+		}
+
+		return widgets;
+	}
 	
 	// ============ 初始化和清理 ============
 	
@@ -163,10 +262,12 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	void initState() {
 		super.initState();
 		initCalendarState();
+		_startNowTimer();
 	}
 
 	@override
 	void dispose() {
+		_nowTimer?.cancel();
 		disposeCalendarState();
 		super.dispose();
 	}
@@ -177,6 +278,9 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	Widget build(BuildContext context) {
 		final theme = Theme.of(context);
 		final days = _weekDays(widget.centerDate);
+		final taskListProvider = context.watch<TaskListProvider>();
+		final now = _now;
+		final today = DateTime(now.year, now.month, now.day);
 		bool inRange(DateTime d, DateTime a, DateTime b) {
 			final dd = DateTime(d.year, d.month, d.day);
 			final aa = DateTime(a.year, a.month, a.day);
@@ -184,6 +288,8 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 			return !dd.isBefore(aa) && !dd.isAfter(bb);
 		}
 		final allDayEvents = widget.events.where((e) => e.allDay && days.any((day) => inRange(day, e.start, e.end))).toList();
+		final todayIndex = days.indexWhere((d) => d.year == today.year && d.month == today.month && d.day == today.day);
+		final weekTodosFuture = DayWeekAiScheduler.getAiScheduledTaskIdsForDate(today);
 		return Focus(
 			autofocus: true,
 			child: KeyboardListener(
@@ -208,9 +314,37 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 				),
 				const Divider(height: 1),
 				// 全天行
-				ConstrainedBox(
-					constraints: const BoxConstraints.tightFor(height: 140),
-					child: SingleAllDayRow(days: days, events: allDayEvents, gutterWidth: CalendarConstants.gutterWidth),
+				SingleAllDayRow(
+					days: days,
+					events: allDayEvents,
+					gutterWidth: CalendarConstants.gutterWidth,
+					minHeight: 140,
+					maxHeight: 220,
+					isExpanded: _isTodayTasksExpanded,
+					onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
+				),
+				const Divider(height: 1),
+				FutureBuilder<Set<String>>(
+					future: weekTodosFuture,
+					builder: (context, snapshot) {
+						final scheduledIds = snapshot.data ?? const <String>{};
+						final todayTodos = taskListProvider
+							.getTasksByDate(today)
+							.where((t) => !t.isCompleted)
+							.where((t) => !scheduledIds.contains(t.id))
+							.map((t) => t.title)
+							.toList();
+						final weekTodos = List<List<String>>.generate(7, (i) => i == todayIndex ? todayTodos : <String>[]);
+						return SingleTodoRow(
+							days: days,
+							todos: weekTodos,
+							gutterWidth: CalendarConstants.gutterWidth,
+							minHeight: 64,
+							maxHeight: 180,
+							isExpanded: _isTodayTodosExpanded,
+							onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+						);
+					},
 				),
 				const Divider(height: 1),
 				// 主体：按小时网格
@@ -243,7 +377,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 																		final bool isLastCol = col == 6;
 																		final bool isFirstRow = hour == 0;
 																		final bool isLastRow = hour == 23;
-																		final BorderSide line = BorderSide(color: Colors.grey.withOpacity(0.5), width: 1);
+																		final BorderSide line = BorderSide(color: Colors.grey.withAlpha(128), width: 1);
 																		
 																		return Expanded(
 																			child: Stack(
@@ -271,7 +405,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 																							right: 0,
 																							height: quarterHeight,
 																							child: Container(
-																								color: isQuarterSelected ? Colors.blue.withOpacity(0.3) : Colors.transparent,
+																								color: isQuarterSelected ? Colors.blue.withAlpha(77) : Colors.transparent,
 																							),
 																						);
 																					}),
@@ -290,6 +424,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 										..._buildEventBlocks(days, constraints),
 										// 空白区域手势检测层
 										..._buildEmptyAreaGestureDetectors(days, constraints),
+										..._buildNowIndicator(days, constraints, todayIndex: todayIndex),
 									],
 								);
 							}

@@ -1,20 +1,17 @@
 import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/models/focus_session_hive.dart';
 import '../../data/models/focus_daily_stats_hive.dart';
 import '../../data/repositories/focus_session_repository.dart';
 import '../../data/repositories/task_list_repository.dart';
 import '../../services/notification_service.dart';
-import '../../services/focus_sound_service.dart';
 
 /// 专注功能状态管理
 class FocusProvider extends ChangeNotifier {
   final FocusSessionRepository _repository;
   final TaskListRepository _taskRepo = TaskListRepository();
   final NotificationService _notificationService = NotificationService();
-  final FocusSoundService _soundService = FocusSoundService();
 
   FocusProvider(this._repository) {
     _loadTodayStats();
@@ -32,13 +29,9 @@ class FocusProvider extends ChangeNotifier {
 
   FocusDailyStatsHive? _todayStats;           // 今日统计
   List<FocusSessionHive> _recentSessions = []; // 最近会话列表
-  
-  int _consecutivePomodoroCount = 0;           // 连续番茄钟计数
 
   // === Getters ===
   
-  /// 连续番茄钟计数
-  int get consecutivePomodoroCount => _consecutivePomodoroCount;
 
   /// 当前专注会话
   FocusSessionHive? get currentSession => _currentSession;
@@ -49,6 +42,18 @@ class FocusProvider extends ChangeNotifier {
 
   /// 是否暂停中
   bool get isPaused => _isPaused;
+
+  int get elapsedSeconds => _elapsedSeconds;
+
+  String get formattedElapsedTime {
+    final totalSeconds = _elapsedSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')} min';
+  }
 
   /// 剩余秒数
   int get remainingSeconds {
@@ -85,10 +90,6 @@ class FocusProvider extends ChangeNotifier {
     return (_todayStats?.totalFocusSeconds ?? 0) ~/ 60;
   }
 
-  /// 今日番茄钟数量
-  int get todayPomodoroCount {
-    return _todayStats?.pomodoroCount ?? 0;
-  }
 
   // === 核心方法 - 会话控制 ===
 
@@ -180,11 +181,6 @@ class FocusProvider extends ChangeNotifier {
     // 停止计时器
     _stopTimer();
     
-    // 更新连续番茄钟计数
-    if (_currentSession!.sessionType == 'pomodoro' && !_currentSession!.isBreak) {
-      _consecutivePomodoroCount++;
-    }
-
     // 更新会话状态
     final updatedSession = _currentSession!.copyWith(
       status: 'completed',
@@ -216,11 +212,6 @@ class FocusProvider extends ChangeNotifier {
     // 停止计时器
     _stopTimer();
     
-    // 取消番茄钟会重置连续计数
-    if (_currentSession!.sessionType == 'pomodoro' && !_currentSession!.isBreak) {
-      _consecutivePomodoroCount = 0;
-    }
-
     // 更新会话状态
     final updatedSession = _currentSession!.copyWith(
       status: 'cancelled',
@@ -239,21 +230,6 @@ class FocusProvider extends ChangeNotifier {
 
   // === 快捷方法 ===
 
-  /// 开始番茄钟（从设置读取时长，默认25分钟）
-  Future<void> startPomodoro({String? taskId, String? workSessionId}) async {
-    // 从设置读取番茄钟时长
-    final prefs = await SharedPreferences.getInstance();
-    final duration = prefs.getInt('focus_pomodoro_duration') ?? 25;
-    
-    await startFocusSession(
-      durationMinutes: duration,
-      taskId: taskId,
-      workSessionId: workSessionId,
-      sessionType: 'pomodoro',
-      isBreak: false,
-    );
-  }
-
   /// 开始自定义时长专注
   Future<void> startCustomSession(int minutes, {String? taskId}) async {
     await startFocusSession(
@@ -262,41 +238,6 @@ class FocusProvider extends ChangeNotifier {
       sessionType: 'custom',
       isBreak: false,
     );
-  }
-
-  /// 开始短休息（从设置读取时长，默认5分钟）
-  Future<void> startBreak([int? minutes]) async {
-    // 如果没有指定时长，从设置读取
-    int duration = minutes ?? 5;
-    if (minutes == null) {
-      final prefs = await SharedPreferences.getInstance();
-      duration = prefs.getInt('focus_short_break_duration') ?? 5;
-    }
-    
-    await startFocusSession(
-      durationMinutes: duration,
-      sessionType: 'break',
-      isBreak: true,
-    );
-  }
-
-  /// 开始长休息（从设置读取时长，默认15分钟）
-  Future<void> startLongBreak([int? minutes]) async {
-    // 如果没有指定时长，从设置读取
-    int duration = minutes ?? 15;
-    if (minutes == null) {
-      final prefs = await SharedPreferences.getInstance();
-      duration = prefs.getInt('focus_long_break_duration') ?? 15;
-    }
-    
-    await startFocusSession(
-      durationMinutes: duration,
-      sessionType: 'long_break',
-      isBreak: true,
-    );
-    
-    // 长休息后重置连续计数
-    _consecutivePomodoroCount = 0;
   }
 
   // === 数据加载 ===
@@ -364,44 +305,26 @@ class FocusProvider extends ChangeNotifier {
       final task = _taskRepo.getTaskById(_currentSession!.taskId!);
       taskTitle = task?.title;
     }
-    
-    // 播放提示音（如果设置中启用）
-    await _playCompleteSoundIfEnabled();
-    
+
     await completeCurrentSession();
-    
+
     // 显示完成通知
     await _showCompleteNotification(taskTitle);
-  }
-
-  /// 播放完成提示音（根据设置）
-  Future<void> _playCompleteSoundIfEnabled() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final enableSound = prefs.getBool('focus_enable_sound') ?? false;
-      
-      if (enableSound) {
-        await _soundService.playCompleteSound();
-        debugPrint('✅ 播放完成提示音');
-      }
-    } catch (e) {
-      debugPrint('播放提示音失败: $e');
-    }
   }
 
   /// 显示专注完成通知
   Future<void> _showCompleteNotification(String? taskTitle) async {
     try {
       final title = taskTitle != null ? '🎉 专注时间到！' : '✅ 专注完成';
-      final body = taskTitle != null 
-          ? '任务"$taskTitle"的专注会话已完成，休息一下吧！' 
+      final body = taskTitle != null
+          ? '任务"$taskTitle"的专注会话已完成，休息一下吧！'
           : '专注会话已完成，休息一下吧！';
-      
+
       await _notificationService.showFocusCompleteNotification(
         title: title,
         body: body,
       );
-      
+
       debugPrint('专注完成通知: $title');
     } catch (e) {
       // 通知失败不影响核心功能，只记录日志

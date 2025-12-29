@@ -1,13 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/focus_provider.dart';
+import '../../providers/schedule_provider.dart';
 import '../../providers/task_list_provider.dart';
-import 'widgets/focus_timer_widget.dart';
-import 'widgets/focus_control_buttons.dart';
-import 'widgets/focus_stats_card.dart';
-import 'widgets/focus_session_list_item.dart';
-import 'dialogs/custom_duration_dialog.dart';
+import '../schedule/models.dart';
 
 /// 专注工具主页面
 class FocusScreen extends StatefulWidget {
@@ -18,100 +16,62 @@ class FocusScreen extends StatefulWidget {
 }
 
 class _FocusScreenState extends State<FocusScreen> {
-  bool _wasActive = false;
-  int _pomodoroDuration = 25;
-  int _shortBreakDuration = 5;
-  int _longBreakDuration = 15;
+  Timer? _clockTimer;
+  DateTime _now = DateTime.now();
+  bool _noteExpanded = false;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
-  }
-
-  /// 加载设置
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _pomodoroDuration = prefs.getInt('focus_pomodoro_duration') ?? 25;
-      _shortBreakDuration = prefs.getInt('focus_short_break_duration') ?? 5;
-      _longBreakDuration = prefs.getInt('focus_long_break_duration') ?? 15;
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _now = DateTime.now();
+      });
     });
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // 每次页面可见时重新加载设置
-    _loadSettings();
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('🎯 专注工具'),
-        centerTitle: true,
-      ),
-      body: Consumer<FocusProvider>(
-        builder: (context, focusProvider, child) {
-          // 检测专注完成（从活动变为不活动）
-          if (_wasActive && !focusProvider.isActive) {
-            _wasActive = false;
-            // 延迟显示完成对话框，避免在 build 中调用
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _showCompletionDialog(context);
-            });
-          } else if (focusProvider.isActive) {
-            _wasActive = true;
-          }
-          
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                // 计时器区域
-                FocusTimerWidget(
-                  remainingSeconds: focusProvider.remainingSeconds,
-                  progress: focusProvider.progress,
-                  isActive: focusProvider.isActive,
-                  isPaused: focusProvider.isPaused,
-                  isBreak: focusProvider.currentSession?.isBreak ?? false,
-                ),
-                const SizedBox(height: 16),
-                
-                // 关联任务显示
-                if (focusProvider.currentSession?.taskId != null)
-                  _buildTaskInfo(context, focusProvider),
-                
-                const SizedBox(height: 24),
-                
-                // 控制按钮
-                FocusControlButtons(
-                  isActive: focusProvider.isActive,
-                  isPaused: focusProvider.isPaused,
-                  pomodoroDuration: _pomodoroDuration,
-                  shortBreakDuration: _shortBreakDuration,
-                  onStartPomodoro: () => _startPomodoro(context, focusProvider),
-                  onStartCustom: () => _startCustom(context, focusProvider),
-                  onStartBreak: () => _startBreak(context, focusProvider),
-                  onPause: () => _pause(context, focusProvider),
-                  onResume: () => _resume(context, focusProvider),
-                  onCancel: () => _cancel(context, focusProvider),
-                ),
-                
-                const SizedBox(height: 32),
-                const Divider(),
-                const SizedBox(height: 24),
-                
-                // 今日统计
-                FocusStatsCard(stats: focusProvider.todayStats),
-                
-                const SizedBox(height: 24),
-                
-                // 最近专注
-                _buildRecentSessions(context, focusProvider),
-              ],
+      body: Consumer2<FocusProvider, ScheduleProvider>(
+        builder: (context, focusProvider, scheduleProvider, child) {
+          final planned = _findCurrentPlannedEvent(scheduleProvider, _now);
+
+          // 优先：如果正在专注会话，则展示会话内容
+          final hasSessionTask = focusProvider.currentSession?.taskId != null;
+          final showSessionTask = focusProvider.isActive && hasSessionTask;
+
+          // 否则：如果当前时间命中日程块，则展示该日程块
+          final showPlannedTask = !showSessionTask && planned != null;
+          final isFreeTime = !showSessionTask && !showPlannedTask;
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: Column(
+                children: [
+                  _buildTopTimeStatus(context),
+                  Expanded(
+                    child: Center(
+                      child: isFreeTime
+                          ? _buildFreeTimeCore(context)
+                          : (showSessionTask
+                              ? _buildSessionTaskCore(context, focusProvider)
+                              : _buildPlannedTaskCore(context, planned!)),
+                    ),
+                  ),
+                  _buildControls(context, focusProvider, isFreeTime: isFreeTime),
+                  const SizedBox(height: 16),
+                  _buildFooterHints(context, focusProvider),
+                ],
+              ),
             ),
           );
         },
@@ -119,397 +79,370 @@ class _FocusScreenState extends State<FocusScreen> {
     );
   }
 
-  /// 构建任务信息显示
-  Widget _buildTaskInfo(BuildContext context, FocusProvider focusProvider) {
-    final taskProvider = context.watch<TaskListProvider>();
-    final task = taskProvider.tasks.cast<dynamic>().firstWhere(
-      (t) => t.id == focusProvider.currentSession?.taskId,
-      orElse: () => null,
-    );
-    
-    if (task == null) return const SizedBox.shrink();
-    
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.task_alt,
-            size: 16,
-            color: Theme.of(context).colorScheme.onPrimaryContainer,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '关联任务：${task.title}',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
-            ),
-          ),
-        ],
+  CalendarEvent? _findCurrentPlannedEvent(ScheduleProvider scheduleProvider, DateTime now) {
+    final events = scheduleProvider.getEventsForDate(now);
+    // 过滤全天事件，只考虑时间块
+    final blocks = events.where((e) => !e.allDay).toList();
+    // 找到覆盖当前时间的事件（start <= now < end）
+    for (final e in blocks) {
+      if (!now.isBefore(e.start) && now.isBefore(e.end)) {
+        return e;
+      }
+    }
+    return null;
+  }
+
+  Widget _buildTopTimeStatus(BuildContext context) {
+    final theme = Theme.of(context);
+    final dateText =
+        '${_now.year.toString().padLeft(4, '0')} / ${_now.month.toString().padLeft(2, '0')} / ${_now.day.toString().padLeft(2, '0')}';
+    final timeText = '${_now.hour.toString().padLeft(2, '0')}:${_now.minute.toString().padLeft(2, '0')}';
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: DefaultTextStyle(
+        style: theme.textTheme.bodySmall!.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(dateText),
+            const SizedBox(height: 2),
+            Text(timeText),
+          ],
+        ),
       ),
     );
   }
 
-  /// 构建最近专注列表
-  Widget _buildRecentSessions(BuildContext context, FocusProvider focusProvider) {
+  Widget _buildFreeTimeCore(BuildContext context) {
     final theme = Theme.of(context);
-    final sessions = focusProvider.recentSessions;
-    
-    if (sessions.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    
+    final start = DateTime(_now.year, _now.month, _now.day, _now.hour);
+    final end = start.add(const Duration(hours: 1));
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Row(
-          children: [
-            Icon(
-              Icons.history,
-              size: 20,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '最近专注',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
+        Text('【自由时间】', style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
         const SizedBox(height: 12),
-        
-        // 会话列表
-        ...sessions.take(5).map((session) {
-          // 获取关联的任务
-          final taskProvider = context.watch<TaskListProvider>();
-          final task = session.taskId != null
-              ? taskProvider.tasks.cast<dynamic>().firstWhere(
-                  (t) => t.id == session.taskId,
-                  orElse: () => null,
-                )
-              : null;
-          
-          return FocusSessionListItem(
-            session: session,
-            task: task,
-          );
-        }),
+        Text(_formatRange(start, end), style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 24),
+        Text('你当前没有被安排的任务', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
       ],
     );
   }
 
-  // === 操作方法 ===
+  Widget _buildPlannedTaskCore(BuildContext context, CalendarEvent event) {
+    final theme = Theme.of(context);
+    final taskProvider = context.watch<TaskListProvider>();
 
-  /// 开始番茄钟
-  Future<void> _startPomodoro(BuildContext context, FocusProvider provider) async {
-    // 如果已有活动会话（不应该出现，但做防御性检查）
-    if (provider.isActive) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已有专注会话进行中')),
+    final taskId = _tryExtractTaskIdFromDescription(event.description);
+    final task = taskId == null
+        ? null
+        : taskProvider.tasks.cast<dynamic>().firstWhere(
+            (t) => t.id == taskId,
+            orElse: () => null,
+          );
+
+    final title = task?.title ?? event.title;
+    final note = (task?.description ?? '').toString();
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          _formatRange(event.start, event.end),
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.displayMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            fontSize: 48,
+            height: 1.15,
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (note.trim().isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => _noteExpanded = !_noteExpanded),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  note,
+                  maxLines: _noteExpanded ? null : 2,
+                  overflow: _noteExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String? _tryExtractTaskIdFromDescription(String description) {
+    final text = description.trim();
+    const prefix = 'AI安排:';
+    if (!text.startsWith(prefix)) return null;
+    final rest = text.substring(prefix.length).trim();
+    return rest.isEmpty ? null : rest;
+  }
+
+  Widget _buildSessionTaskCore(BuildContext context, FocusProvider focusProvider) {
+    final theme = Theme.of(context);
+    final taskProvider = context.watch<TaskListProvider>();
+    final session = focusProvider.currentSession;
+    if (session == null) {
+      return const SizedBox.shrink();
+    }
+
+    final task = taskProvider.tasks.cast<dynamic>().firstWhere(
+      (t) => t.id == session.taskId,
+      orElse: () => null,
+    );
+
+    final start = session.startTime;
+    final end = session.startTime.add(Duration(seconds: session.plannedDuration));
+    final title = task?.title ?? '当前任务';
+    final note = (task?.description ?? '').toString();
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          _formatRange(start, end),
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.displayMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            fontSize: 48,
+            height: 1.15,
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (note.trim().isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => _noteExpanded = !_noteExpanded),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  note,
+                  maxLines: _noteExpanded ? null : 2,
+                  overflow: _noteExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildControls(BuildContext context, FocusProvider focusProvider, {required bool isFreeTime}) {
+    if (isFreeTime) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          FilledButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('AI 安排稍后接入')),
+              );
+            },
+            child: const Text('让 AI 帮我安排'),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('保持空闲')),
+              );
+            },
+            child: const Text('保持空闲'),
+          ),
+        ],
       );
-      return;
     }
-    
-    try {
-      await provider.startPomodoro();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已开始25分钟番茄钟')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('启动失败：${e.toString()}')),
-        );
-      }
-    }
+
+    final isActive = focusProvider.isActive;
+    final isPaused = focusProvider.isPaused;
+
+    final canStart = !isActive;
+    final canPause = isActive && !isPaused;
+    final canComplete = isActive;
+    final canInterrupt = isActive;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        FilledButton(
+          onPressed: canStart ? () => _handleStart(context, focusProvider) : null,
+          child: const Text('开始'),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton(
+          onPressed: canPause ? () => _handlePause(context, focusProvider) : null,
+          child: const Text('暂停'),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton(
+          onPressed: canComplete ? () => _handleEarlyComplete(context, focusProvider) : null,
+          child: const Text('提前完成'),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton(
+          onPressed: canInterrupt ? () => _handleInterrupted(context, focusProvider) : null,
+          child: const Text('被打断'),
+        ),
+      ],
+    );
   }
 
-  /// 开始自定义时长
-  Future<void> _startCustom(BuildContext context, FocusProvider provider) async {
-    // 检查是否已有活动会话
-    if (provider.isActive) {
+  Widget _buildFooterHints(BuildContext context, FocusProvider focusProvider) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: DefaultTextStyle(
+        style: theme.textTheme.bodySmall!.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('已专注时长：${focusProvider.formattedElapsedTime}'),
+            const SizedBox(height: 4),
+            const Text('AI 建议：稍后接入（只读占位）'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleStart(BuildContext context, FocusProvider provider) async {
+    if (provider.isActive) return;
+    try {
+      await provider.startCustomSession(60);
+    } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已有专注会话进行中')),
+        SnackBar(content: Text('启动失败：${e.toString()}')),
       );
-      return;
-    }
-    
-    final minutes = await CustomDurationDialog.show(context);
-    if (minutes == null) return;
-    
-    try {
-      await provider.startCustomSession(minutes);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已开始${minutes}分钟专注')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('启动失败：${e.toString()}')),
-        );
-      }
     }
   }
 
-  /// 开始短休息
-  Future<void> _startBreak(BuildContext context, FocusProvider provider) async {
-    // 检查是否已有活动会话
-    if (provider.isActive) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已有专注会话进行中')),
-      );
-      return;
-    }
-    
-    try {
-      await provider.startBreak(); // 使用设置中的短休息时长
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已开始短休息 $_shortBreakDuration分钟')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('启动失败：${e.toString()}')),
-        );
-      }
-    }
-  }
-
-  /// 开始长休息
-  Future<void> _startLongBreak(BuildContext context, FocusProvider provider) async {
-    // 检查是否已有活动会话
-    if (provider.isActive) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已有专注会话进行中')),
-      );
-      return;
-    }
-    
-    try {
-      await provider.startLongBreak(); // 使用设置中的长休息时长
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已开始长休息 $_longBreakDuration分钟')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('启动失败：${e.toString()}')),
-        );
-      }
-    }
-  }
-
-  /// 暂停
-  Future<void> _pause(BuildContext context, FocusProvider provider) async {
-    await provider.pauseCurrentSession();
-  }
-
-  /// 恢复
-  Future<void> _resume(BuildContext context, FocusProvider provider) async {
-    await provider.resumeCurrentSession();
-  }
-
-  /// 取消
-  Future<void> _cancel(BuildContext context, FocusProvider provider) async {
-    // 二次确认
-    final confirmed = await showDialog<bool>(
+  Future<void> _handlePause(BuildContext context, FocusProvider provider) async {
+    final choice = await showDialog<int>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('取消专注'),
-        content: const Text('确定要取消当前的专注会话吗？'),
+        title: const Text('你想如何处理暂停？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('继续专注'),
+            onPressed: () => Navigator.of(context).pop(0),
+            child: const Text('稍后继续'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认取消'),
+            onPressed: () => Navigator.of(context).pop(1),
+            child: const Text('今天不再继续'),
           ),
         ],
       ),
     );
-    
-    if (confirmed == true) {
-      await provider.cancelCurrentSession();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已取消专注会话')),
-        );
-      }
+
+    if (choice == null) return;
+    if (choice == 0) {
+      await provider.pauseCurrentSession();
+      return;
     }
+    await provider.cancelCurrentSession();
   }
 
-  /// 显示专注完成对话框
-  void _showCompletionDialog(BuildContext context) {
-    final focusProvider = context.read<FocusProvider>();
-    final taskProvider = context.read<TaskListProvider>();
-    final recentSessions = focusProvider.recentSessions;
-    
-    // 获取最后完成的会话
-    if (recentSessions.isEmpty) return;
-    
-    final lastSession = recentSessions.first;
-    if (!lastSession.isCompleted) return;
-    
-    final isBreak = lastSession.isBreak;
-    final consecutiveCount = focusProvider.consecutivePomodoroCount;
-    final shouldSuggestLongBreak = consecutiveCount >= 4;  // 建议长休息的阈值
-    
-    final task = lastSession.taskId != null
-        ? taskProvider.tasks.cast<dynamic>().firstWhere(
-            (t) => t.id == lastSession.taskId,
-            orElse: () => null,
-          )
-        : null;
-    
-    showDialog(
+  Future<void> _handleEarlyComplete(BuildContext context, FocusProvider provider) async {
+    final choice = await showDialog<int>(
       context: context,
-      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        icon: Icon(
-          isBreak ? Icons.check_circle : Icons.celebration,
-          size: 64,
-          color: isBreak ? Colors.green : Theme.of(context).colorScheme.primary,
-        ),
-        title: Text(isBreak ? '✅ 休息完成！' : '🎉 专注完成！'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 主提示文案
-            Text(
-              _getCompletionMessage(isBreak, task, shouldSuggestLongBreak),
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 12),
-            
-            // 连续番茄钟计数（仅专注完成时显示）
-            if (!isBreak && consecutiveCount > 0)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: shouldSuggestLongBreak 
-                      ? Colors.orange.withOpacity(0.1)
-                      : Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '🍅 连续完成 $consecutiveCount 个番茄钟',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: shouldSuggestLongBreak ? Colors.orange[700] : null,
-                  ),
-                ),
-              ),
-            
-            const SizedBox(height: 16),
-            
-            // 时长卡片
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isBreak 
-                    ? Colors.green.withOpacity(0.1)
-                    : Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isBreak 
-                      ? Colors.green.withOpacity(0.3)
-                      : Theme.of(context).colorScheme.primary.withOpacity(0.3),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.timer,
-                    color: isBreak ? Colors.green : Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${lastSession.actualDuration ~/ 60} 分钟',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: isBreak ? Colors.green : Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        title: const Text('该任务是否已完成？'),
         actions: [
-          if (!isBreak) ...[
-            // 专注完成后：提供短休息和长休息选项
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('稍后'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _startBreak(context, focusProvider);
-              },
-              icon: const Icon(Icons.coffee_outlined, size: 18),
-              label: Text('短休息 $_shortBreakDuration分', style: const TextStyle(fontSize: 14)),
-            ),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _startLongBreak(context, focusProvider);
-              },
-              icon: const Icon(Icons.hotel, size: 18),
-              label: Text('长休息 $_longBreakDuration分', style: const TextStyle(fontSize: 14)),
-              style: shouldSuggestLongBreak 
-                  ? FilledButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      foregroundColor: Colors.white,
-                    )
-                  : null,
-            ),
-          ] else ...[
-            // 休息完成后：只需确认
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('继续工作'),
-            ),
-          ],
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(0),
+            child: const Text('否，稍后还需继续'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(1),
+            child: const Text('是，任务完成'),
+          ),
         ],
       ),
     );
+
+    if (choice == null) return;
+
+    if (choice == 1) {
+      final session = provider.currentSession;
+      await provider.completeCurrentSession();
+      if (!context.mounted) return;
+      if (session?.taskId != null) {
+        await context.read<TaskListProvider>().toggleTaskCompletion(session!.taskId!);
+      }
+      return;
+    }
+
+    await provider.cancelCurrentSession();
   }
 
-  /// 获取完成提示文案
-  String _getCompletionMessage(bool isBreak, dynamic task, bool shouldSuggestLongBreak) {
-    if (isBreak) {
-      return '休息时间已结束，精力充沛！\n准备好继续专注工作了吗？';
-    }
-    
-    String baseMessage = task != null
-        ? '任务「${task.title}」的专注会话已完成\n做得好！'
-        : '恭喜！您已完成一次专注会话\n做得好！';
-    
-    if (shouldSuggestLongBreak) {
-      return '$baseMessage\n\n💡 建议：您已连续工作较久，\n可以考虑长休息深度放松';
-    } else {
-      return '$baseMessage\n要不要休息一下？';
-    }
+  Future<void> _handleInterrupted(BuildContext context, FocusProvider provider) async {
+    final choice = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('发生了什么？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(0),
+            child: const Text('临时打断（稍后可补）'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(1),
+            child: const Text('今日不可继续'),
+          ),
+        ],
+      ),
+    );
+
+    if (choice == null) return;
+    await provider.cancelCurrentSession();
+  }
+
+  String _formatRange(DateTime start, DateTime end) {
+    final s = '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+    final e = '${end.hour.toString().padLeft(2, '0')}:${end.minute.toString().padLeft(2, '0')}';
+    return '$s — $e';
   }
 }
 

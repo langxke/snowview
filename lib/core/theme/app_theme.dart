@@ -10,6 +10,8 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       colorScheme: cs,
+      fontFamily: 'Consolas',
+      fontFamilyFallback: const ['Microsoft YaHei', '微软雅黑'],
       scaffoldBackgroundColor: Colors.white,
       canvasColor: Colors.white,
       appBarTheme: const AppBarTheme(centerTitle: true, backgroundColor: Colors.white, foregroundColor: Colors.black),
@@ -26,6 +28,8 @@ class AppTheme {
     return ThemeData(
       colorScheme: AppColorScheme.dark,
       useMaterial3: true,
+      fontFamily: 'Consolas',
+      fontFamilyFallback: const ['Microsoft YaHei', '微软雅黑'],
       appBarTheme: const AppBarTheme(centerTitle: true),
       cardTheme: CardThemeData(
         shape: RoundedRectangleBorder(

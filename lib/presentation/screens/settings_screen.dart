@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../services/focus_sound_service.dart';
 import '../../data/repositories/ai_config_repository.dart';
 import '../../data/models/ai_config_hive.dart';
 import '../../services/ai_service.dart';
@@ -13,15 +13,15 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  // 专注设置
-  int _pomodoroDuration = 25;
-  int _shortBreakDuration = 5;
-  int _longBreakDuration = 15;
-  bool _enableNotification = true;
-  bool _enableSound = false;
-  
-  final FocusSoundService _soundService = FocusSoundService();
-  
+  // 可分配时间段设置
+  static const String _prefsKeyWeekdayRanges = 'availability_weekday_ranges_v1';
+  static const String _prefsKeyWeekendRanges = 'availability_weekend_ranges_v1';
+  static const String _prefsKeyWorkdays = 'availability_workdays_v1';
+
+  List<_TimeRange> _weekdayRanges = <_TimeRange>[const _TimeRange(startMinutes: 9 * 60, endMinutes: 12 * 60), const _TimeRange(startMinutes: 13 * 60, endMinutes: 18 * 60)];
+  List<_TimeRange> _weekendRanges = <_TimeRange>[const _TimeRange(startMinutes: 10 * 60, endMinutes: 12 * 60), const _TimeRange(startMinutes: 14 * 60, endMinutes: 18 * 60)];
+  Set<int> _workdays = <int>{1, 2, 3, 4, 5};
+
   // AI配置设置
   final AIConfigRepository _aiConfigRepo = AIConfigRepository();
   final TextEditingController _apiKeyController = TextEditingController();
@@ -37,80 +37,180 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSettings();
     _loadAIConfig();
+    _loadAvailabilitySettings();
   }
   
   @override
   void dispose() {
-    _soundService.dispose();
     _apiKeyController.dispose();
     _baseUrlController.dispose();
     _modelController.dispose();
     super.dispose();
   }
 
-  /// 加载设置
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _pomodoroDuration = prefs.getInt('focus_pomodoro_duration') ?? 25;
-      _shortBreakDuration = prefs.getInt('focus_short_break_duration') ?? 5;
-      _longBreakDuration = prefs.getInt('focus_long_break_duration') ?? 15;
-      _enableNotification = prefs.getBool('focus_enable_notification') ?? true;
-      _enableSound = prefs.getBool('focus_enable_sound') ?? false;
-    });
-  }
+  // ==================== AI配置相关方法 ====================
 
-  /// 静默保存设置（不显示提示）
-  Future<void> _saveSettingsQuietly() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('focus_pomodoro_duration', _pomodoroDuration);
-    await prefs.setInt('focus_short_break_duration', _shortBreakDuration);
-    await prefs.setInt('focus_long_break_duration', _longBreakDuration);
-    await prefs.setBool('focus_enable_notification', _enableNotification);
-    await prefs.setBool('focus_enable_sound', _enableSound);
-  }
+  Future<void> _loadAvailabilitySettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-  /// 保存设置并显示提示（用于开关切换）
-  Future<void> _saveSettingsWithToast() async {
-    await _saveSettingsQuietly();
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('设置已保存'),
-          duration: Duration(seconds: 1),
-        ),
-      );
+      final weekdayRaw = prefs.getString(_prefsKeyWeekdayRanges);
+      final weekendRaw = prefs.getString(_prefsKeyWeekendRanges);
+      final workdaysRaw = prefs.getStringList(_prefsKeyWorkdays);
+
+      final weekdayParsed = _parseRanges(weekdayRaw);
+      final weekendParsed = _parseRanges(weekendRaw);
+      final workdaysParsed = _parseWorkdays(workdaysRaw);
+
+      if (!mounted) return;
+      setState(() {
+        if (weekdayParsed != null && weekdayParsed.isNotEmpty) {
+          _weekdayRanges = weekdayParsed;
+        }
+        if (weekendParsed != null && weekendParsed.isNotEmpty) {
+          _weekendRanges = weekendParsed;
+        }
+        if (workdaysParsed != null && workdaysParsed.isNotEmpty) {
+          _workdays = workdaysParsed;
+        }
+      });
+    } catch (_) {
+      // ignore
     }
   }
 
-  /// 播放测试提示音
-  Future<void> _playTestSound() async {
-    try {
-      await _soundService.playCompleteSound();
+  Set<int>? _parseWorkdays(List<String>? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = <int>{};
+    for (final s in raw) {
+      final v = int.tryParse(s);
+      if (v != null && v >= 1 && v <= 7) {
+        parsed.add(v);
+      }
+    }
+    return parsed;
+  }
+
+  List<_TimeRange>? _parseRanges(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return null;
+    final ranges = <_TimeRange>[];
+    for (final item in decoded) {
+      if (item is Map) {
+        final start = item['startMinutes'];
+        final end = item['endMinutes'];
+        if (start is int && end is int) {
+          final range = _TimeRange(startMinutes: start, endMinutes: end);
+          if (range.isValid) {
+            ranges.add(range);
+          }
+        }
+      }
+    }
+    return ranges;
+  }
+
+  Future<void> _saveAvailabilitySettingsQuietly() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _prefsKeyWeekdayRanges,
+      jsonEncode(_weekdayRanges.map((e) => e.toJson()).toList()),
+    );
+    await prefs.setString(
+      _prefsKeyWeekendRanges,
+      jsonEncode(_weekendRanges.map((e) => e.toJson()).toList()),
+    );
+    await prefs.setStringList(
+      _prefsKeyWorkdays,
+      _workdays.map((e) => e.toString()).toList(),
+    );
+  }
+
+  void _toggleWorkday(int weekday) {
+    setState(() {
+      if (_workdays.contains(weekday)) {
+        _workdays = {..._workdays}..remove(weekday);
+      } else {
+        _workdays = {..._workdays}..add(weekday);
+      }
+    });
+    _saveAvailabilitySettingsQuietly();
+  }
+
+  Future<void> _pickAndSetTime({
+    required bool isWeekday,
+    required int index,
+    required bool isStart,
+  }) async {
+    final ranges = isWeekday ? _weekdayRanges : _weekendRanges;
+    if (index < 0 || index >= ranges.length) return;
+
+    final current = ranges[index];
+    final initial = isStart ? current.startTimeOfDay : current.endTimeOfDay;
+
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initial,
+    );
+    if (picked == null) return;
+
+    final pickedMinutes = picked.hour * 60 + picked.minute;
+    final updated = isStart
+        ? current.copyWith(startMinutes: pickedMinutes)
+        : current.copyWith(endMinutes: pickedMinutes);
+
+    if (!updated.isValid) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('这就是专注完成时的提示音'),
+            content: Text('时间段无效：结束时间必须晚于开始时间'),
             duration: Duration(seconds: 2),
           ),
         );
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('播放失败：${e.toString()}'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      return;
     }
+
+    setState(() {
+      final updatedRanges = [...ranges];
+      updatedRanges[index] = updated;
+      if (isWeekday) {
+        _weekdayRanges = updatedRanges;
+      } else {
+        _weekendRanges = updatedRanges;
+      }
+    });
+    await _saveAvailabilitySettingsQuietly();
   }
 
-  // ==================== AI配置相关方法 ====================
+  void _addRange({required bool isWeekday}) {
+    setState(() {
+      final target = isWeekday ? _weekdayRanges : _weekendRanges;
+      final updated = [...target, const _TimeRange(startMinutes: 9 * 60, endMinutes: 10 * 60)];
+      if (isWeekday) {
+        _weekdayRanges = updated;
+      } else {
+        _weekendRanges = updated;
+      }
+    });
+    _saveAvailabilitySettingsQuietly();
+  }
+
+  void _removeRange({required bool isWeekday, required int index}) {
+    setState(() {
+      final target = isWeekday ? _weekdayRanges : _weekendRanges;
+      if (index < 0 || index >= target.length) return;
+      final updated = [...target]..removeAt(index);
+      if (isWeekday) {
+        _weekdayRanges = updated;
+      } else {
+        _weekendRanges = updated;
+      }
+    });
+    _saveAvailabilitySettingsQuietly();
+  }
 
   /// 加载AI配置
   Future<void> _loadAIConfig() async {
@@ -339,15 +439,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('⚙️ 设置'),
-        centerTitle: true,
+        title: const Text('设置'),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(16),
         children: [
-          _buildAIConfigSettings(context),
+          _buildAvailabilitySettings(context),
           const SizedBox(height: 24),
-          _buildFocusSettings(context),
+          _buildAIConfigSettings(context),
           const SizedBox(height: 24),
           _buildAboutSection(context),
         ],
@@ -355,16 +454,205 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// AI配置设置
+  Widget _buildAvailabilitySettings(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 960),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.schedule, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      '可分配时间段',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '设置 AI 在安排任务时可使用的时间范围（支持多段）',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                Text(
+                  '工作日定义',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _buildWeekdayChip(context, label: '周一', weekday: 1),
+                    _buildWeekdayChip(context, label: '周二', weekday: 2),
+                    _buildWeekdayChip(context, label: '周三', weekday: 3),
+                    _buildWeekdayChip(context, label: '周四', weekday: 4),
+                    _buildWeekdayChip(context, label: '周五', weekday: 5),
+                    _buildWeekdayChip(context, label: '周六', weekday: 6),
+                    _buildWeekdayChip(context, label: '周日', weekday: 7),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '未选中的日期将视为周末/非工作日，并使用「周末」可分配时间段。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const Divider(height: 32),
+
+                _buildRangeGroup(
+                  context,
+                  title: '工作日',
+                  ranges: _weekdayRanges,
+                  isWeekday: true,
+                ),
+                const SizedBox(height: 20),
+                _buildRangeGroup(
+                  context,
+                  title: '周末',
+                  ranges: _weekendRanges,
+                  isWeekday: false,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeekdayChip(
+    BuildContext context, {
+    required String label,
+    required int weekday,
+  }) {
+    final selected = _workdays.contains(weekday);
+    return FilterChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => _toggleWorkday(weekday),
+    );
+  }
+
+  Widget _buildRangeGroup(
+    BuildContext context, {
+    required String title,
+    required List<_TimeRange> ranges,
+    required bool isWeekday,
+  }) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _addRange(isWeekday: isWeekday),
+              icon: const Icon(Icons.add),
+              label: const Text('新增时间段'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (ranges.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              '暂无时间段',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        else
+          ...List.generate(ranges.length, (index) {
+            final range = ranges[index];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        OutlinedButton(
+                          onPressed: () => _pickAndSetTime(
+                            isWeekday: isWeekday,
+                            index: index,
+                            isStart: true,
+                          ),
+                          child: Text('开始 ${range.formatStart()}'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () => _pickAndSetTime(
+                            isWeekday: isWeekday,
+                            index: index,
+                            isStart: false,
+                          ),
+                          child: Text('结束 ${range.formatEnd()}'),
+                        ),
+                        Text(
+                          '共 ${range.durationMinutes} 分钟',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '删除',
+                    onPressed: () => _removeRange(isWeekday: isWeekday, index: index),
+                    icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
   Widget _buildAIConfigSettings(BuildContext context) {
     final theme = Theme.of(context);
-    
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 960),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             // 标题
             Row(
               children: [
@@ -386,7 +674,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            
+
             // API Key输入框
             TextField(
               controller: _apiKeyController,
@@ -409,7 +697,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            
+
             // Base URL输入框
             TextField(
               controller: _baseUrlController,
@@ -422,7 +710,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            
+
             // 模型选择
             TextField(
               controller: _modelController,
@@ -434,9 +722,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 helperText: '输入您的模型名称，支持所有兼容OpenAI API的模型',
               ),
             ),
-            
+
             const Divider(height: 32),
-            
+
             // 高级设置标题
             Text(
               '高级设置',
@@ -445,7 +733,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            
+
             // Temperature滑块
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -486,7 +774,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Max Tokens滑块
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -526,7 +814,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
-            
+
             // 启用工具调用开关
             SwitchListTile(
               title: const Text('启用工具调用'),
@@ -538,9 +826,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 });
               },
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             // 配置状态指示
             if (_hasValidConfig)
               Container(
@@ -564,9 +852,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
               ),
-            
+
             const SizedBox(height: 16),
-            
+
             // 操作按钮
             Row(
               children: [
@@ -599,207 +887,108 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 专注设置
-  Widget _buildFocusSettings(BuildContext context) {
-    final theme = Theme.of(context);
-    
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.timer, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Text(
-                  '专注设置',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
               ],
             ),
-            const SizedBox(height: 20),
-            
-            // 时长设置
-            _buildDurationSetting(
-              '番茄钟时长',
-              _pomodoroDuration,
-              (value) {
-                _pomodoroDuration = value.round();
-              },
-              min: 10,
-              max: 60,
-            ),
-            const SizedBox(height: 16),
-            
-            _buildDurationSetting(
-              '短休息时长',
-              _shortBreakDuration,
-              (value) {
-                _shortBreakDuration = value.round();
-              },
-              min: 3,
-              max: 15,
-            ),
-            const SizedBox(height: 16),
-            
-            _buildDurationSetting(
-              '长休息时长',
-              _longBreakDuration,
-              (value) {
-                _longBreakDuration = value.round();
-              },
-              min: 10,
-              max: 30,
-            ),
-            
-            const Divider(height: 32),
-            
-            // 通知和音效设置
-            SwitchListTile(
-              title: const Text('启用通知提醒'),
-              subtitle: const Text('专注完成时发送通知'),
-              value: _enableNotification,
-              onChanged: (value) {
-                setState(() {
-                  _enableNotification = value;
-                });
-                _saveSettingsWithToast();
-              },
-            ),
-            
-            SwitchListTile(
-              title: const Text('启用音效'),
-              subtitle: const Text('专注完成时播放提示音'),
-              value: _enableSound,
-              onChanged: (value) {
-                setState(() {
-                  _enableSound = value;
-                });
-                _saveSettingsWithToast();
-              },
-            ),
-            
-            // 试听提示音按钮
-            if (_enableSound)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: OutlinedButton.icon(
-                  onPressed: _playTestSound,
-                  icon: const Icon(Icons.volume_up),
-                  label: const Text('试听提示音'),
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 40),
-                  ),
-                ),
-              ),
-          ],
+          ),
         ),
       ),
-    );
-  }
-
-  /// 时长设置项
-  Widget _buildDurationSetting(
-    String label,
-    int value,
-    ValueChanged<double> onChanged, {
-    required int min,
-    required int max,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(label),
-            Text(
-              '$value 分钟',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Slider(
-          value: value.toDouble(),
-          min: min.toDouble(),
-          max: max.toDouble(),
-          divisions: max - min,
-          label: '$value 分钟',
-          onChanged: (newValue) {
-            // 滑动时只更新UI，不保存
-            setState(() {
-              onChanged(newValue);
-            });
-          },
-          onChangeEnd: (newValue) {
-            // 用户松手后才保存设置
-            _saveSettingsQuietly();
-          },
-        ),
-      ],
     );
   }
 
   /// 关于部分
   Widget _buildAboutSection(BuildContext context) {
     final theme = Theme.of(context);
-    
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 960),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.info_outline, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
+                Row(
+                  children: [
+                    Icon(Icons.info_outline, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      '关于',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 Text(
-                  '关于',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
+                  '雪象 SnowView',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '版本：1.0.0',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '基于AI辅助的智能日程规划和专注工具',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              '雪象 SnowView',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '版本：1.0.0',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '基于AI辅助的智能日程规划和专注工具',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
+  }
+}
+
+class _TimeRange {
+  final int startMinutes;
+  final int endMinutes;
+
+  const _TimeRange({
+    required this.startMinutes,
+    required this.endMinutes,
+  });
+
+  bool get isValid => startMinutes >= 0 && endMinutes <= 24 * 60 && endMinutes > startMinutes;
+
+  int get durationMinutes => endMinutes - startMinutes;
+
+  TimeOfDay get startTimeOfDay => TimeOfDay(hour: startMinutes ~/ 60, minute: startMinutes % 60);
+
+  TimeOfDay get endTimeOfDay => TimeOfDay(hour: endMinutes ~/ 60, minute: endMinutes % 60);
+
+  String formatStart() => _formatMinutes(startMinutes);
+
+  String formatEnd() => _formatMinutes(endMinutes);
+
+  _TimeRange copyWith({int? startMinutes, int? endMinutes}) {
+    return _TimeRange(
+      startMinutes: startMinutes ?? this.startMinutes,
+      endMinutes: endMinutes ?? this.endMinutes,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'startMinutes': startMinutes,
+      'endMinutes': endMinutes,
+    };
+  }
+
+  static String _formatMinutes(int minutes) {
+    final h = (minutes ~/ 60).toString().padLeft(2, '0');
+    final m = (minutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
   }
 }

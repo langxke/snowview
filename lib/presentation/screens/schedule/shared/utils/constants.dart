@@ -7,7 +7,7 @@ class CalendarConstants {
   static const double hourRowHeight = 100.0;
   
   /// 时间标签区域的宽度（像素）
-  static const double gutterWidth = 56.0;
+  static const double gutterWidth = 80.0;
   
   /// 日视图中调整手柄的高度（像素）
   static const double resizeHandleHeightDay = 12.0;

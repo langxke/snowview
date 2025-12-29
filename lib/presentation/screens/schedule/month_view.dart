@@ -6,6 +6,7 @@ class MonthView extends StatefulWidget {
 	final int year;
 	final int month;
 	final List<CalendarEvent> events;
+	final Map<String, List<String>> todosByDate;
 	final Function(DateTime start, DateTime end) onAddEvent;
 	
 	const MonthView({
@@ -13,6 +14,7 @@ class MonthView extends StatefulWidget {
 		required this.year,
 		required this.month,
 		required this.events,
+		required this.todosByDate,
 		required this.onAddEvent,
 	});
 
@@ -95,6 +97,8 @@ class _MonthViewState extends State<MonthView> {
 								final inCurrentMonth = date.month == widget.month;
 								final bool isSelected = _selectedDates.any((d) => _isSameDate(d, date));
 								final dayEvents = widget.events.where((e) => e.intersects(date)).toList(growable: false);
+								final key = _dateKey(date);
+								final dayTodos = widget.todosByDate[key] ?? const <String>[];
 								return DayCell(
 									index: index,
 									totalCells: totalCells,
@@ -103,6 +107,7 @@ class _MonthViewState extends State<MonthView> {
 									inCurrentMonth: inCurrentMonth,
 									isSelected: isSelected,
 									events: dayEvents,
+									todos: dayTodos,
 								);
 							},
 						),
@@ -152,6 +157,11 @@ class _MonthViewState extends State<MonthView> {
 
 	bool _isSameDate(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
 	DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+	String _dateKey(DateTime d) {
+		final mm = d.month.toString().padLeft(2, '0');
+		final dd = d.day.toString().padLeft(2, '0');
+		return '${d.year}-$mm-$dd';
+	}
 	List<DateTime> _buildDateRange(DateTime a, DateTime b) {
 		final start = a.isBefore(b) ? a : b;
 		final end = a.isBefore(b) ? b : a;

@@ -1,5 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -11,6 +13,8 @@ import 'shared/handlers/event_move_handler.dart';
 import 'shared/handlers/time_selection_handler.dart';
 import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
+import '../../providers/task_list_provider.dart';
+import 'day_week_ai_scheduler.dart';
 
 class DayView extends StatefulWidget {
 	final DateTime date;
@@ -36,6 +40,10 @@ class DayView extends StatefulWidget {
 }
 
 class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGestureMixin {
+	bool _isTodayTasksExpanded = true;
+	bool _isTodayTodosExpanded = true;
+	Timer? _nowTimer;
+	DateTime _now = DateTime.now();
 	
 	// ============ 实现 CalendarGestureMixin 的抽象方法 ============
 	
@@ -92,7 +100,9 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 		if (!TimeSelectionHandler.isValidSelection(
 			startQuarter: selectedStartQuarter,
 			endQuarter: selectedEndQuarter,
-		)) return;
+		)) {
+			return;
+		}
 		
 		// 使用handler创建时间范围
 		final timeRange = TimeSelectionHandler.createTimeRange(
@@ -126,10 +136,12 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	void initState() {
 		super.initState();
 		initCalendarState();
+		_startNowTimer();
 	}
 
 	@override
 	void dispose() {
+		_nowTimer?.cancel();
 		disposeCalendarState();
 		super.dispose();
 	}
@@ -139,12 +151,16 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	@override
 	Widget build(BuildContext context) {
 		final theme = Theme.of(context);
+		final now = _now;
+		final today = DateTime(now.year, now.month, now.day);
+		final isViewingToday = widget.date.year == today.year && widget.date.month == today.month && widget.date.day == today.day;
 		bool inRange(DateTime d, DateTime a, DateTime b) {
 			final dd = DateTime(d.year, d.month, d.day);
 			final aa = DateTime(a.year, a.month, a.day);
 			final bb = DateTime(b.year, b.month, b.day);
 			return !dd.isBefore(aa) && !dd.isAfter(bb);
 		}
+		final taskListProvider = context.watch<TaskListProvider>();
 		final allDayEvents = widget.events.where((e) => e.allDay && inRange(widget.date, e.start, e.end)).toList();
 		return Focus(
 			autofocus: true,
@@ -175,6 +191,30 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 					gutterWidth: CalendarConstants.gutterWidth,
 					minHeight: 140,
 					maxHeight: 220,
+					isExpanded: _isTodayTasksExpanded,
+					onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
+				),
+				const Divider(height: 1),
+				FutureBuilder<Set<String>>(
+					future: DayWeekAiScheduler.getAiScheduledTaskIdsForDate(widget.date),
+					builder: (context, snapshot) {
+						final scheduledIds = snapshot.data ?? const <String>{};
+						final todayTodos = taskListProvider
+							.getTasksByDate(widget.date)
+							.where((t) => !t.isCompleted)
+							.where((t) => !scheduledIds.contains(t.id))
+							.map((t) => t.title)
+							.toList();
+						return SingleTodoRow(
+							days: [widget.date],
+							todos: [todayTodos],
+							gutterWidth: CalendarConstants.gutterWidth,
+							minHeight: 64,
+							maxHeight: 180,
+							isExpanded: _isTodayTodosExpanded,
+							onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+						);
+					},
 				),
 				const Divider(height: 1),
 				Expanded(
@@ -185,7 +225,7 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 									children: List.generate(24, (hour) {
 										final bool isFirstRow = hour == 0;
 										final bool isLastRow = hour == 23;
-										final BorderSide line = BorderSide(color: Colors.grey.withOpacity(0.5), width: 1);
+										final BorderSide line = BorderSide(color: Colors.grey.withAlpha(128), width: 1);
 										
 										return SizedBox(
 											height: CalendarConstants.hourRowHeight,
@@ -225,7 +265,7 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 																		right: 0,
 																		height: quarterHeight,
 																		child: Container(
-																			color: isQuarterSelected ? Colors.blue.withOpacity(0.3) : Colors.transparent,
+																			color: isQuarterSelected ? Colors.blue.withAlpha(77) : Colors.transparent,
 																		),
 																	);
 																}),
@@ -241,6 +281,7 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 								..._buildEventBlocks(),
 								// 空白区域手势检测层
 								..._buildEmptyAreaGestureDetectors(),
+								..._buildNowIndicator(showLine: isViewingToday),
 							],
 						),
 					),
@@ -249,6 +290,75 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 				),
 			),
 		);
+	}
+	
+	void _startNowTimer() {
+		_nowTimer?.cancel();
+		final now = DateTime.now();
+		final nextMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute)
+			.add(const Duration(minutes: 1));
+		final delay = nextMinute.difference(now);
+		_nowTimer = Timer(delay, () {
+			if (!mounted) return;
+			setState(() => _now = DateTime.now());
+			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+				if (!mounted) return;
+				setState(() => _now = DateTime.now());
+			});
+		});
+	}
+
+	List<Widget> _buildNowIndicator({required bool showLine}) {
+		final y = TimeUtils.timeToY(_now);
+		final hh = _now.hour.toString().padLeft(2, '0');
+		final mm = _now.minute.toString().padLeft(2, '0');
+		final timeText = '$hh:$mm';
+
+		final widgets = <Widget>[
+			Positioned(
+				top: y - 9,
+				left: 0,
+				width: CalendarConstants.gutterWidth,
+				child: IgnorePointer(
+					child: Align(
+						alignment: Alignment.centerRight,
+						child: Container(
+							padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+							decoration: BoxDecoration(
+								color: Colors.red,
+								borderRadius: BorderRadius.circular(4),
+							),
+							child: Text(
+								timeText,
+								style: const TextStyle(
+									color: Colors.white,
+									fontSize: 11,
+									fontWeight: FontWeight.w600,
+								),
+							),
+						),
+					),
+				),
+			),
+		];
+
+		if (showLine) {
+			widgets.add(
+				Positioned(
+					top: y,
+					left: CalendarConstants.gutterWidth,
+					right: 0,
+					child: IgnorePointer(
+						child: Container(
+							height: 2,
+							color: Colors.red,
+						),
+					),
+				),
+			);
+		}
+
+		return widgets;
 	}
 	
 	// ============ 辅助方法 ============
