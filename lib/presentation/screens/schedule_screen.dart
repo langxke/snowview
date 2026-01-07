@@ -39,6 +39,22 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   static const int _yearRange = 10; // 当前年 ±10 年
 
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// 月视图网格实际显示的范围（包含上月月末/下月月初）。
+  /// 返回的 end 是“开区间”，可直接用于 getEventsInRange(start, end)。
+  ({DateTime start, DateTime end}) _monthGridRange({required int year, required int month}) {
+    final firstOfMonth = DateTime(year, month, 1);
+    final firstWeekdayMonFirst = ((firstOfMonth.weekday + 6) % 7); // 以周一为 0
+    final startDate = _dateOnly(firstOfMonth.subtract(Duration(days: firstWeekdayMonFirst)));
+    const columns = 7;
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final weeksNeeded = ((firstWeekdayMonFirst + daysInMonth + columns - 1) ~/ columns);
+    final totalCells = weeksNeeded * columns;
+    final endExclusive = startDate.add(Duration(days: totalCells));
+    return (start: startDate, end: endExclusive);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -60,9 +76,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         final weekEnd = weekStart.add(const Duration(days: 7));
         return scheduleProvider.getEventsInRange(weekStart, weekEnd);
       case CalendarView.month:
-        final monthStart = DateTime(_year, _month, 1);
-        final monthEnd = DateTime(_year, _month + 1, 0);
-        return scheduleProvider.getEventsInRange(monthStart, monthEnd);
+        final range = _monthGridRange(year: _year, month: _month);
+        return scheduleProvider.getEventsInRange(range.start, range.end);
     }
   }
 
@@ -294,6 +309,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         );
       case CalendarView.month:
         final taskListProvider = context.watch<TaskListProvider>();
+        final gridRange = _monthGridRange(year: _year, month: _month);
         final scheduledTaskIds = <String>{
           for (final e in allEvents)
             if (!e.allDay) ...[
@@ -307,8 +323,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           if (scheduledTaskIds.contains(t.id)) continue;
           final due = t.dueDate;
           if (due == null) continue;
-          if (due.year != _year || due.month != _month) continue;
-          final key = _dateKey(due);
+          final dueDay = _dateOnly(due);
+          if (dueDay.isBefore(gridRange.start) || !dueDay.isBefore(gridRange.end)) continue;
+          final key = _dateKey(dueDay);
           (todosByDate[key] ??= <String>[]).add(t.title);
         }
         return MonthView(

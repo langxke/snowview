@@ -44,15 +44,27 @@ class MonthAiScheduler {
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    final selectedMonthStart = DateTime(year, month, 1);
     final monthEnd = DateTime(year, month + 1, 0);
 
-    if (today.isAfter(monthEnd)) {
+    final currentMonthStart = DateTime(today.year, today.month, 1);
+    DateTime rangeStart;
+
+    if (selectedMonthStart.isBefore(currentMonthStart)) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前月份已结束，无法安排')),
+        const SnackBar(content: Text('当前选择的是过去的月份，无法安排')),
       );
       return;
     }
+
+    if (selectedMonthStart.isAfter(currentMonthStart)) {
+      rangeStart = selectedMonthStart;
+    } else {
+      rangeStart = today;
+    }
+
+    if (rangeStart.isAfter(monthEnd)) return;
 
     final taskProvider = context.read<TaskListProvider>();
     final candidates = taskProvider.tasks
@@ -72,7 +84,7 @@ class MonthAiScheduler {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('AI智能安排'),
-        content: Text('将从今日开始到本月最后一天，为 ${candidates.length} 条任务分配日期（不创建新 todo）。是否继续？'),
+        content: Text('将从 ${_dateKey(rangeStart)} 到 ${_dateKey(monthEnd)}，为 ${candidates.length} 条任务分配日期（不创建新 todo）。是否继续？'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('开始')),
@@ -86,7 +98,7 @@ class MonthAiScheduler {
     try {
       final assignments = await _callMonthSchedulingAI(
         aiService: aiService,
-        today: today,
+        today: rangeStart,
         monthEnd: monthEnd,
         candidates: candidates,
       );
@@ -250,7 +262,6 @@ class MonthAiScheduler {
         if (dyn.description != null) 'description': dyn.description,
         if (dyn.dueDate != null) 'dueDate': _dateKey(dyn.dueDate as DateTime),
         if (dyn.remindAt != null) 'remindAt': (dyn.remindAt as DateTime).toIso8601String(),
-        'isLongTerm': dyn.isLongTerm == true,
         if (dyn.createdAt != null) 'createdAt': (dyn.createdAt as DateTime).toIso8601String(),
       };
     }).toList();

@@ -74,6 +74,14 @@ class DayWeekAiScheduler {
     }
   }
 
+  static Future<void> unmarkAiScheduledTaskForDate({
+    required DateTime date,
+    required String taskId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _unmarkTaskScheduledForDate(prefs: prefs, date: date, taskId: taskId);
+  }
+
   static Future<void> runDaySmartSchedule(BuildContext context, {required DateTime day}) async {
     final rangeStart = _dayStart(day);
     final rangeEnd = _dayEnd(day);
@@ -303,7 +311,6 @@ class DayWeekAiScheduler {
         'title': dyn.title,
         if (dyn.description != null) 'description': dyn.description,
         if (dyn.remindAt != null) 'remindAt': (dyn.remindAt as DateTime).toIso8601String(),
-        'isLongTerm': dyn.isLongTerm == true,
       };
     }).toList();
 

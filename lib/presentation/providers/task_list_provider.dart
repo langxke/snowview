@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/models/checklist_task_hive.dart';
 import '../../data/repositories/task_list_repository.dart';
 
@@ -93,6 +96,41 @@ class TaskListProvider extends ChangeNotifier {
   void toggleScheduledTasksExpanded() {
     _isScheduledTasksExpanded = !_isScheduledTasksExpanded;
     notifyListeners();
+  }
+
+  static const String _taskMetaPrefsPrefix = 'task_meta_v1_';
+
+  Future<bool> isTaskRecurring(String taskId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_taskMetaPrefsPrefix$taskId');
+    if (raw == null || raw.trim().isEmpty) return false;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return false;
+      final rep = decoded['repeat']?.toString();
+      return rep != null && rep.trim().isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Set<String>> getRecurringTaskIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = <String>{};
+    for (final t in _tasks) {
+      final raw = prefs.getString('$_taskMetaPrefsPrefix${t.id}');
+      if (raw == null || raw.trim().isEmpty) continue;
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) continue;
+        final rep = decoded['repeat']?.toString();
+        if (rep == null || rep.trim().isEmpty) continue;
+        ids.add(t.id);
+      } catch (_) {
+        // ignore invalid meta
+      }
+    }
+    return ids;
   }
   
   // ==================== 初始化和加载 ====================

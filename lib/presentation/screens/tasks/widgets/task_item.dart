@@ -314,15 +314,12 @@ class _TaskItemState extends State<TaskItem> {
                       _buildDueDateChip(context, widget.task.dueDate!),
                     ],
 
-                    if (widget.task.isLongTerm) ...[
+                    if (_repeatRule != null && _repeatRule!.trim().isNotEmpty && _repeatRule != 'none') ...[
                       const SizedBox(width: 4),
-                      IconButton(
-                        icon: const Icon(Icons.autorenew_rounded, size: 18),
-                        tooltip: '长期任务',
-                        onPressed: null,
-                        padding: const EdgeInsets.all(4),
-                        constraints: const BoxConstraints(),
-                        iconSize: 18,
+                      Icon(
+                        Icons.autorenew_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.onSurface.withAlpha(153),
                       ),
                     ],
                   ],

@@ -9,7 +9,6 @@ import 'completed_tasks_section.dart';
 enum _TaskContextAction {
   rename,
   scheduleToday,
-  markLongTerm,
   markCompleted,
   delete,
 }
@@ -22,27 +21,45 @@ class TaskListPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<TaskListProvider>(
       builder: (context, provider, child) {
-        final scheduledTasks = provider.scheduledUncompletedTasks;
-        final uncompletedTasks = provider.unscheduledUncompletedTasks;
-        final completedTasks = provider.completedTasks;
+        return FutureBuilder<Set<String>>(
+          future: provider.getRecurringTaskIds(),
+          builder: (context, snapshot) {
+            final recurringIds = snapshot.data ?? const <String>{};
+            final scheduledTasks = provider.scheduledUncompletedTasks.toList()
+              ..sort((a, b) {
+                final ar = recurringIds.contains(a.id);
+                final br = recurringIds.contains(b.id);
+                if (ar != br) return ar ? -1 : 1;
+                return (a.dueDate!).compareTo(b.dueDate!);
+              });
+            final uncompletedTasks = provider.unscheduledUncompletedTasks.toList()
+              ..sort((a, b) {
+                final ar = recurringIds.contains(a.id);
+                final br = recurringIds.contains(b.id);
+                if (ar != br) return ar ? -1 : 1;
+                return b.createdAt.compareTo(a.createdAt);
+              });
+            final completedTasks = provider.completedTasks;
 
-        return Column(
-          children: [
-            // 头部
-            _buildHeader(context, uncompletedTasks.length),
+            return Column(
+              children: [
+                // 头部
+                _buildHeader(context, uncompletedTasks.length),
 
-            // 任务列表
-            Expanded(
-              child: uncompletedTasks.isEmpty && scheduledTasks.isEmpty && completedTasks.isEmpty
-                  ? _buildEmptyState(context)
-                  : _buildTaskList(context, provider, uncompletedTasks, scheduledTasks, completedTasks),
-            ),
+                // 任务列表
+                Expanded(
+                  child: uncompletedTasks.isEmpty && scheduledTasks.isEmpty && completedTasks.isEmpty
+                      ? _buildEmptyState(context)
+                      : _buildTaskList(context, provider, uncompletedTasks, scheduledTasks, completedTasks),
+                ),
 
-            // 底部快速添加
-            TaskQuickAddInput(
-              onSubmit: (title) => _handleAddTask(provider, title),
-            ),
-          ],
+                // 底部快速添加
+                TaskQuickAddInput(
+                  onSubmit: (title) => _handleAddTask(provider, title),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -101,13 +118,13 @@ class TaskListPanel extends StatelessWidget {
           Icon(
             Icons.inbox_outlined,
             size: 80,
-            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
+            color: Theme.of(context).colorScheme.onSurface.withAlpha(77),
           ),
           const SizedBox(height: 24),
           Text(
             '暂无任务',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  color: Theme.of(context).colorScheme.onSurface.withAlpha(153),
                   fontWeight: FontWeight.w600,
                 ),
           ),
@@ -115,7 +132,7 @@ class TaskListPanel extends StatelessWidget {
           Text(
             '点击下方输入框添加新任务',
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+                  color: Theme.of(context).colorScheme.onSurface.withAlpha(102),
                 ),
           ),
         ],
@@ -247,15 +264,6 @@ class TaskListPanel extends StatelessWidget {
           ),
         ),
         PopupMenuItem<_TaskContextAction>(
-          value: _TaskContextAction.markLongTerm,
-          child: Row(
-            children: [
-              const Text('📌  '),
-              const Text('标记为长期任务'),
-            ],
-          ),
-        ),
-        PopupMenuItem<_TaskContextAction>(
           value: _TaskContextAction.markCompleted,
           enabled: !task.isCompleted,
           child: Row(
@@ -290,9 +298,6 @@ class TaskListPanel extends StatelessWidget {
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
         await provider.updateTask(id: task.id, dueDate: today);
-        break;
-      case _TaskContextAction.markLongTerm:
-        await provider.updateTask(id: task.id, isLongTerm: !task.isLongTerm);
         break;
       case _TaskContextAction.markCompleted:
         await provider.toggleTaskCompletion(task.id);
@@ -351,7 +356,7 @@ class _ScheduledHeader extends StatelessWidget {
         );
 
     final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+          color: Theme.of(context).colorScheme.onSurface.withAlpha(153),
         );
 
     return InkWell(
@@ -370,7 +375,7 @@ class _ScheduledHeader extends StatelessWidget {
             Icon(
               Icons.event_available_outlined,
               size: 18,
-              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              color: Theme.of(context).colorScheme.onSurface.withAlpha(153),
             ),
           ],
         ),
