@@ -113,22 +113,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _saveAvailabilitySettingsQuietly() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _prefsKeyWeekdayRanges,
-      jsonEncode(_weekdayRanges.map((e) => e.toJson()).toList()),
-    );
-    await prefs.setString(
-      _prefsKeyWeekendRanges,
-      jsonEncode(_weekendRanges.map((e) => e.toJson()).toList()),
-    );
-    await prefs.setStringList(
-      _prefsKeyWorkdays,
-      _workdays.map((e) => e.toString()).toList(),
-    );
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _prefsKeyWeekdayRanges,
+        jsonEncode(_weekdayRanges.map((e) => e.toJson()).toList()),
+      );
+      await prefs.setString(
+        _prefsKeyWeekendRanges,
+        jsonEncode(_weekendRanges.map((e) => e.toJson()).toList()),
+      );
+      await prefs.setStringList(
+        _prefsKeyWorkdays,
+        _workdays.map((e) => e.toString()).toList(),
+      );
+    } catch (e) {
+      debugPrint('[SettingsScreen] save availability failed: $e');
+    }
   }
 
-  void _toggleWorkday(int weekday) {
+  Future<void> _toggleWorkday(int weekday) async {
     setState(() {
       if (_workdays.contains(weekday)) {
         _workdays = {..._workdays}..remove(weekday);
@@ -136,7 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _workdays = {..._workdays}..add(weekday);
       }
     });
-    _saveAvailabilitySettingsQuietly();
+    await _saveAvailabilitySettingsQuietly();
   }
 
   Future<void> _pickAndSetTime({
@@ -185,7 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _saveAvailabilitySettingsQuietly();
   }
 
-  void _addRange({required bool isWeekday}) {
+  Future<void> _addRange({required bool isWeekday}) async {
     setState(() {
       final target = isWeekday ? _weekdayRanges : _weekendRanges;
       final updated = [...target, const _TimeRange(startMinutes: 9 * 60, endMinutes: 10 * 60)];
@@ -195,10 +199,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _weekendRanges = updated;
       }
     });
-    _saveAvailabilitySettingsQuietly();
+    await _saveAvailabilitySettingsQuietly();
   }
 
-  void _removeRange({required bool isWeekday, required int index}) {
+  Future<void> _removeRange({required bool isWeekday, required int index}) async {
     setState(() {
       final target = isWeekday ? _weekdayRanges : _weekendRanges;
       if (index < 0 || index >= target.length) return;
@@ -209,7 +213,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _weekendRanges = updated;
       }
     });
-    _saveAvailabilitySettingsQuietly();
+    await _saveAvailabilitySettingsQuietly();
   }
 
   /// 加载AI配置
@@ -834,7 +838,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.green.withOpacity(0.1),
+                  color: Colors.green.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.green),
                 ),

@@ -21,24 +21,48 @@ class TaskListPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<TaskListProvider>(
       builder: (context, provider, child) {
-        return FutureBuilder<Set<String>>(
-          future: provider.getRecurringTaskIds(),
+        return FutureBuilder<List<Set<String>>>(
+          future: Future.wait([
+            provider.getRecurringTaskIds(),
+            provider.getTimeBlockScheduledTaskIds(),
+          ]),
           builder: (context, snapshot) {
-            final recurringIds = snapshot.data ?? const <String>{};
-            final scheduledTasks = provider.scheduledUncompletedTasks.toList()
-              ..sort((a, b) {
-                final ar = recurringIds.contains(a.id);
-                final br = recurringIds.contains(b.id);
-                if (ar != br) return ar ? -1 : 1;
-                return (a.dueDate!).compareTo(b.dueDate!);
-              });
-            final uncompletedTasks = provider.unscheduledUncompletedTasks.toList()
-              ..sort((a, b) {
-                final ar = recurringIds.contains(a.id);
-                final br = recurringIds.contains(b.id);
-                if (ar != br) return ar ? -1 : 1;
-                return b.createdAt.compareTo(a.createdAt);
-              });
+            final recurringIds = snapshot.data != null && snapshot.data!.isNotEmpty ? snapshot.data![0] : const <String>{};
+            final timeBlockScheduledIds = snapshot.data != null && snapshot.data!.length > 1 ? snapshot.data![1] : const <String>{};
+
+            final scheduledTasks = provider.scheduledUncompletedTasks.toList();
+            final uncompletedTasks = provider.unscheduledUncompletedTasks.toList();
+
+            for (int i = uncompletedTasks.length - 1; i >= 0; i--) {
+              final task = uncompletedTasks[i];
+              final isRecurring = recurringIds.contains(task.id);
+              final isTimeBlockScheduled = timeBlockScheduledIds.contains(task.id);
+              if (isRecurring && isTimeBlockScheduled) {
+                uncompletedTasks.removeAt(i);
+                scheduledTasks.add(task);
+              }
+            }
+
+            scheduledTasks.sort((a, b) {
+              final ar = recurringIds.contains(a.id);
+              final br = recurringIds.contains(b.id);
+              if (ar != br) return ar ? -1 : 1;
+
+              final ad = a.dueDate;
+              final bd = b.dueDate;
+              if (ad != null && bd != null) return ad.compareTo(bd);
+              if (ad != null) return -1;
+              if (bd != null) return 1;
+              return b.createdAt.compareTo(a.createdAt);
+            });
+
+            uncompletedTasks.sort((a, b) {
+              final ar = recurringIds.contains(a.id);
+              final br = recurringIds.contains(b.id);
+              if (ar != br) return ar ? -1 : 1;
+              return b.createdAt.compareTo(a.createdAt);
+            });
+
             final completedTasks = provider.completedTasks;
 
             return Column(

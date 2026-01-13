@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -44,6 +46,18 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	bool _isTodayTodosExpanded = true;
 	Timer? _nowTimer;
 	DateTime _now = DateTime.now();
+
+	bool get _isShowingNowIndicator {
+		final n = DateTime.now();
+		final today = DateTime(n.year, n.month, n.day);
+		final days = _weekDays(widget.centerDate);
+		for (final d in days) {
+			if (d.year == today.year && d.month == today.month && d.day == today.day) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	// ============ 实现 CalendarGestureMixin 的抽象方法 ============
 	
@@ -167,18 +181,33 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 		);
 	}
 
-	void _startNowTimer() {
+	void _updateNowTimer() {
 		_nowTimer?.cancel();
+		_nowTimer = null;
+		if (!_isShowingNowIndicator) {
+			return;
+		}
 		final now = DateTime.now();
 		final nextMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute)
 			.add(const Duration(minutes: 1));
 		final delay = nextMinute.difference(now);
 		_nowTimer = Timer(delay, () {
 			if (!mounted) return;
-			setState(() => _now = DateTime.now());
+			final n = DateTime.now();
+			setState(() => _now = n);
 			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
 				if (!mounted) return;
-				setState(() => _now = DateTime.now());
+				if (!_isShowingNowIndicator) {
+					_nowTimer?.cancel();
+					_nowTimer = null;
+					return;
+				}
+				final nn = DateTime.now();
+				final prev = _now;
+				if (nn.year == prev.year && nn.month == prev.month && nn.day == prev.day && nn.hour == prev.hour && nn.minute == prev.minute) {
+					return;
+				}
+				setState(() => _now = nn);
 			});
 		});
 	}
@@ -228,14 +257,16 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 		];
 
 		if (showLines) {
+			const thinHeight = 1.5;
+			const thickHeight = 3.0;
 			// 贯穿全周的细红线
 			widgets.add(
 				Positioned(
-					top: y,
+					top: y - thinHeight / 2,
 					left: CalendarConstants.gutterWidth,
 					right: 0,
 					child: IgnorePointer(
-						child: Container(height: 1.5, color: Colors.red),
+						child: Container(height: thinHeight, color: Colors.red),
 					),
 				),
 			);
@@ -243,11 +274,11 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 			// 今天列范围内更粗一点
 			widgets.add(
 				Positioned(
-					top: y,
+					top: y - thickHeight / 2,
 					left: todayLeft,
 					width: columnWidth,
 					child: IgnorePointer(
-						child: Container(height: 3, color: Colors.red),
+						child: Container(height: thickHeight, color: Colors.red),
 					),
 				),
 			);
@@ -262,7 +293,17 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	void initState() {
 		super.initState();
 		initCalendarState();
-		_startNowTimer();
+		_updateNowTimer();
+	}
+
+	@override
+	void didUpdateWidget(covariant WeekView oldWidget) {
+		super.didUpdateWidget(oldWidget);
+		if (oldWidget.centerDate.year != widget.centerDate.year ||
+			oldWidget.centerDate.month != widget.centerDate.month ||
+			oldWidget.centerDate.day != widget.centerDate.day) {
+			_updateNowTimer();
+		}
 	}
 
 	@override
@@ -289,7 +330,6 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 		}
 		final allDayEvents = widget.events.where((e) => e.allDay && days.any((day) => inRange(day, e.start, e.end))).toList();
 		final todayIndex = days.indexWhere((d) => d.year == today.year && d.month == today.month && d.day == today.day);
-		final weekTodosFuture = DayWeekAiScheduler.getAiScheduledTaskIdsForDate(today);
 		return Focus(
 			autofocus: true,
 			child: KeyboardListener(
@@ -324,17 +364,48 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 					onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
 				),
 				const Divider(height: 1),
-				FutureBuilder<Set<String>>(
-					future: weekTodosFuture,
+				FutureBuilder<List<List<String>>>(
+					future: () async {
+						final prefs = await SharedPreferences.getInstance();
+						final results = <List<String>>[];
+						for (final d in days) {
+							final scheduledIds = await DayWeekAiScheduler.getAiScheduledTaskIdsForDate(d);
+							final dayKey = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+							final titles = <String>[];
+							final seen = <String>{};
+
+							for (final t in taskListProvider.tasks) {
+								if (t.isCompleted) continue;
+								if (scheduledIds.contains(t.id)) continue;
+								if (!seen.add(t.id)) continue;
+
+								final due = t.dueDate;
+								if (due != null && due.year == d.year && due.month == d.month && due.day == d.day) {
+									titles.add(t.title);
+									continue;
+								}
+
+								final raw = prefs.getString('task_meta_v1_${t.id}');
+								if (raw == null || raw.trim().isEmpty) continue;
+								try {
+									final decoded = jsonDecode(raw);
+									if (decoded is! Map) continue;
+									final v = decoded['aiDueDates'];
+									if (v is! List) continue;
+									final has = v.any((e) => e.toString().startsWith(dayKey));
+									if (!has) continue;
+									titles.add(t.title);
+								} catch (_) {
+									continue;
+								}
+							}
+
+							results.add(titles);
+						}
+						return results;
+					}(),
 					builder: (context, snapshot) {
-						final scheduledIds = snapshot.data ?? const <String>{};
-						final todayTodos = taskListProvider
-							.getTasksByDate(today)
-							.where((t) => !t.isCompleted)
-							.where((t) => !scheduledIds.contains(t.id))
-							.map((t) => t.title)
-							.toList();
-						final weekTodos = List<List<String>>.generate(7, (i) => i == todayIndex ? todayTodos : <String>[]);
+						final weekTodos = snapshot.data ?? List<List<String>>.generate(days.length, (_) => const <String>[]);
 						return SingleTodoRow(
 							days: days,
 							todos: weekTodos,

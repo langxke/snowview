@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -44,6 +46,13 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	bool _isTodayTodosExpanded = true;
 	Timer? _nowTimer;
 	DateTime _now = DateTime.now();
+
+	bool get _isViewingToday {
+		final n = DateTime.now();
+		final today = DateTime(n.year, n.month, n.day);
+		final d = DateTime(widget.date.year, widget.date.month, widget.date.day);
+		return d.year == today.year && d.month == today.month && d.day == today.day;
+	}
 	
 	// ============ 实现 CalendarGestureMixin 的抽象方法 ============
 	
@@ -136,7 +145,15 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	void initState() {
 		super.initState();
 		initCalendarState();
-		_startNowTimer();
+		_updateNowTimer();
+	}
+
+	@override
+	void didUpdateWidget(covariant DayView oldWidget) {
+		super.didUpdateWidget(oldWidget);
+		if (oldWidget.date.year != widget.date.year || oldWidget.date.month != widget.date.month || oldWidget.date.day != widget.date.day) {
+			_updateNowTimer();
+		}
 	}
 
 	@override
@@ -199,20 +216,55 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 					future: DayWeekAiScheduler.getAiScheduledTaskIdsForDate(widget.date),
 					builder: (context, snapshot) {
 						final scheduledIds = snapshot.data ?? const <String>{};
-						final todayTodos = taskListProvider
-							.getTasksByDate(widget.date)
-							.where((t) => !t.isCompleted)
-							.where((t) => !scheduledIds.contains(t.id))
-							.map((t) => t.title)
-							.toList();
-						return SingleTodoRow(
-							days: [widget.date],
-							todos: [todayTodos],
-							gutterWidth: CalendarConstants.gutterWidth,
-							minHeight: 64,
-							maxHeight: 180,
-							isExpanded: _isTodayTodosExpanded,
-							onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+						return FutureBuilder<List<String>>(
+							future: () async {
+								final prefs = await SharedPreferences.getInstance();
+								final dayKey = '${widget.date.year}-${widget.date.month.toString().padLeft(2, '0')}-${widget.date.day.toString().padLeft(2, '0')}';
+								final titles = <String>[];
+								final seen = <String>{};
+
+								for (final t in taskListProvider.tasks) {
+									if (t.isCompleted) continue;
+									if (scheduledIds.contains(t.id)) continue;
+									if (seen.contains(t.id)) continue;
+
+									final due = t.dueDate;
+									if (due != null && due.year == widget.date.year && due.month == widget.date.month && due.day == widget.date.day) {
+										titles.add(t.title);
+										seen.add(t.id);
+										continue;
+									}
+
+									final raw = prefs.getString('task_meta_v1_${t.id}');
+									if (raw == null || raw.trim().isEmpty) continue;
+									try {
+										final decoded = jsonDecode(raw);
+										if (decoded is! Map) continue;
+										final v = decoded['aiDueDates'];
+										if (v is! List) continue;
+										final has = v.any((e) => e.toString().startsWith(dayKey));
+										if (!has) continue;
+										titles.add(t.title);
+										seen.add(t.id);
+									} catch (_) {
+										continue;
+									}
+								}
+
+								return titles;
+							}(),
+							builder: (context, todoSnap) {
+								final todayTodos = todoSnap.data ?? const <String>[];
+								return SingleTodoRow(
+									days: [widget.date],
+									todos: [todayTodos],
+									gutterWidth: CalendarConstants.gutterWidth,
+									minHeight: 64,
+									maxHeight: 180,
+									isExpanded: _isTodayTodosExpanded,
+									onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+								);
+							},
 						);
 					},
 				),
@@ -292,18 +344,32 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 		);
 	}
 	
-	void _startNowTimer() {
+	void _updateNowTimer() {
 		_nowTimer?.cancel();
+		_nowTimer = null;
+		if (!_isViewingToday) {
+			return;
+		}
 		final now = DateTime.now();
-		final nextMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute)
-			.add(const Duration(minutes: 1));
+		final nextMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute).add(const Duration(minutes: 1));
 		final delay = nextMinute.difference(now);
 		_nowTimer = Timer(delay, () {
 			if (!mounted) return;
-			setState(() => _now = DateTime.now());
+			final n = DateTime.now();
+			setState(() => _now = n);
 			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
 				if (!mounted) return;
-				setState(() => _now = DateTime.now());
+				if (!_isViewingToday) {
+					_nowTimer?.cancel();
+					_nowTimer = null;
+					return;
+				}
+				final nn = DateTime.now();
+				final prev = _now;
+				if (nn.year == prev.year && nn.month == prev.month && nn.day == prev.day && nn.hour == prev.hour && nn.minute == prev.minute) {
+					return;
+				}
+				setState(() => _now = nn);
 			});
 		});
 	}

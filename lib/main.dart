@@ -182,6 +182,7 @@ class MyApp extends StatelessWidget {
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
           themeMode: theme.mode,
+          themeAnimationDuration: Duration.zero,
           home: const MainScreen(),
         ),
       ),

@@ -17,6 +17,23 @@ class DayWeekAiScheduler {
   static const String _eventMetaAiKey = 'ai';
   static const String _scheduledTaskIdsByDatePrefix = 'ai_scheduled_task_ids_v1_';
 
+
+  // 可分配时间段设置（与 SettingsScreen 保持一致）
+  static const String _prefsKeyWeekdayRanges = 'availability_weekday_ranges_v1';
+  static const String _prefsKeyWeekendRanges = 'availability_weekend_ranges_v1';
+  static const String _prefsKeyWorkdays = 'availability_workdays_v1';
+
+  // 默认值（与 SettingsScreen 初始值保持一致）
+  static const List<_TimeRange> _defaultWeekdayRanges = <_TimeRange>[
+    _TimeRange(startMinutes: 9 * 60, endMinutes: 12 * 60),
+    _TimeRange(startMinutes: 13 * 60, endMinutes: 18 * 60),
+  ];
+  static const List<_TimeRange> _defaultWeekendRanges = <_TimeRange>[
+    _TimeRange(startMinutes: 10 * 60, endMinutes: 12 * 60),
+    _TimeRange(startMinutes: 14 * 60, endMinutes: 18 * 60),
+  ];
+  static const Set<int> _defaultWorkdays = <int>{1, 2, 3, 4, 5};
+
   static void _logLong(String tag, String message) {
     const chunk = 900;
     if (message.length <= chunk) {
@@ -41,6 +58,142 @@ class DayWeekAiScheduler {
   }
 
   static String _scheduledTaskKeyForDate(DateTime d) => '$_scheduledTaskIdsByDatePrefix${_dateOnlyKey(d)}';
+
+  static List<_TimeRange>? _parseRanges(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return null;
+      final ranges = <_TimeRange>[];
+      for (final item in decoded) {
+        if (item is Map) {
+          final start = item['startMinutes'];
+          final end = item['endMinutes'];
+          if (start is int && end is int) {
+            final r = _TimeRange(startMinutes: start, endMinutes: end);
+            if (r.isValid) ranges.add(r);
+          }
+        }
+      }
+      return ranges;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Set<int>? _parseWorkdays(List<String>? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = <int>{};
+    for (final s in raw) {
+      final v = int.tryParse(s);
+      if (v != null && v >= 1 && v <= 7) parsed.add(v);
+    }
+    return parsed;
+  }
+
+  static Future<({List<_TimeRange> weekday, List<_TimeRange> weekend, Set<int> workdays})> _loadAvailability() async {
+    final prefs = await SharedPreferences.getInstance();
+    final weekdayRaw = prefs.getString(_prefsKeyWeekdayRanges);
+    final weekendRaw = prefs.getString(_prefsKeyWeekendRanges);
+    final workdaysRaw = prefs.getStringList(_prefsKeyWorkdays);
+
+    final weekdayParsed = _parseRanges(weekdayRaw);
+    final weekendParsed = _parseRanges(weekendRaw);
+    final workdaysParsed = _parseWorkdays(workdaysRaw);
+
+    final weekday = weekdayParsed ?? _defaultWeekdayRanges;
+    final weekend = weekendParsed ?? _defaultWeekendRanges;
+    final workdays = workdaysParsed ?? _defaultWorkdays;
+
+    if (weekdayParsed == null) {
+      debugPrint('[DayWeekAiScheduler] availability weekdayRanges parse failed, fallback to default. raw=${weekdayRaw ?? '<null>'}');
+    }
+    if (weekendParsed == null) {
+      debugPrint('[DayWeekAiScheduler] availability weekendRanges parse failed, fallback to default. raw=${weekendRaw ?? '<null>'}');
+    }
+    if (workdaysParsed == null) {
+      debugPrint('[DayWeekAiScheduler] availability workdays parse failed, fallback to default. raw=${workdaysRaw ?? const <String>[]}'.toString());
+    }
+    return (weekday: weekday, weekend: weekend, workdays: workdays);
+  }
+
+  static List<_TimeRange> _rangesForDate({required DateTime date, required List<_TimeRange> weekday, required List<_TimeRange> weekend, required Set<int> workdays}) {
+    final isWorkday = workdays.contains(date.weekday);
+    return isWorkday ? weekday : weekend;
+  }
+
+  static DateTime _applyMinutes(DateTime day, int minutes) {
+    // Guard against 24:00 (1440) which would otherwise spill to next day.
+    // SettingsScreen validation allows endMinutes up to 24*60.
+    if (minutes >= 24 * 60) {
+      return _dayEnd(day);
+    }
+    if (minutes <= 0) {
+      return DateTime(day.year, day.month, day.day);
+    }
+    return DateTime(day.year, day.month, day.day, minutes ~/ 60, minutes % 60);
+  }
+
+  static bool _blockWithinAnyWindow({required DateTime start, required DateTime end, required List<({DateTime start, DateTime end})> windows}) {
+    for (final w in windows) {
+      if (!start.isBefore(w.start) && !end.isAfter(w.end)) return true;
+    }
+    return false;
+  }
+
+  static List<({DateTime start, DateTime end})> _mergeIntervals(List<({DateTime start, DateTime end})> intervals) {
+    if (intervals.isEmpty) return const [];
+    final sorted = [...intervals]..sort((a, b) => a.start.compareTo(b.start));
+    final merged = <({DateTime start, DateTime end})>[];
+    var cur = sorted.first;
+    for (int i = 1; i < sorted.length; i++) {
+      final next = sorted[i];
+      if (!next.start.isAfter(cur.end)) {
+        final end = next.end.isAfter(cur.end) ? next.end : cur.end;
+        cur = (start: cur.start, end: end);
+      } else {
+        merged.add(cur);
+        cur = next;
+      }
+    }
+    merged.add(cur);
+    return merged;
+  }
+
+  static List<({DateTime start, DateTime end})> _subtractBusyFromWindow({
+    required DateTime windowStart,
+    required DateTime windowEnd,
+    required List<({DateTime start, DateTime end})> busy,
+  }) {
+    if (!windowEnd.isAfter(windowStart)) return const [];
+    if (busy.isEmpty) return [(start: windowStart, end: windowEnd)];
+    final mergedBusy = _mergeIntervals(busy);
+    final result = <({DateTime start, DateTime end})>[];
+    var cursor = windowStart;
+    for (final b in mergedBusy) {
+      if (!b.end.isAfter(windowStart)) continue;
+      if (!b.start.isBefore(windowEnd)) break;
+      final bs = b.start.isBefore(windowStart) ? windowStart : b.start;
+      final be = b.end.isAfter(windowEnd) ? windowEnd : b.end;
+      if (bs.isAfter(cursor)) {
+        result.add((start: cursor, end: bs));
+      }
+      if (be.isAfter(cursor)) cursor = be;
+      if (!windowEnd.isAfter(cursor)) break;
+    }
+    if (windowEnd.isAfter(cursor)) {
+      result.add((start: cursor, end: windowEnd));
+    }
+    return result.where((w) => w.end.isAfter(w.start)).toList(growable: false);
+  }
+
+  static bool _overlapsBusy({required DateTime start, required DateTime end, required List<CalendarEvent> busyEvents}) {
+    for (final b in busyEvents) {
+      if (b.allDay) continue;
+      if (start.isBefore(b.end) && end.isAfter(b.start)) return true;
+    }
+    return false;
+  }
 
   static Future<Set<String>> getAiScheduledTaskIdsForDate(DateTime date) async {
     final prefs = await SharedPreferences.getInstance();
@@ -83,15 +236,33 @@ class DayWeekAiScheduler {
   }
 
   static Future<void> runDaySmartSchedule(BuildContext context, {required DateTime day}) async {
-    final rangeStart = _dayStart(day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final targetDay = DateTime(day.year, day.month, day.day);
+    final rangeStart = targetDay == today ? now : _dayStart(day);
     final rangeEnd = _dayEnd(day);
     await _runSmartSchedule(context, rangeStart: rangeStart, rangeEnd: rangeEnd, scopeLabel: '当天');
   }
 
   static Future<void> runWeekSmartSchedule(BuildContext context, {required DateTime centerDate}) async {
-    final start = _dayStart(centerDate.subtract(Duration(days: centerDate.weekday - 1)));
-    final end = _dayEnd(start.add(const Duration(days: 6)));
-    await _runSmartSchedule(context, rangeStart: start, rangeEnd: end, scopeLabel: '本周');
+    final now = DateTime.now();
+    final today = _dayStart(DateTime(now.year, now.month, now.day));
+    final centerDay = _dayStart(centerDate);
+
+    // 本周定义：从“今天/所选日期（取较晚者）”开始，到该周周日结束；
+    // 且如果 start 是今天，则从当前时间开始（避免安排到今天已经过去的时间）。
+    final weekStartMon = _dayStart(centerDay.subtract(Duration(days: centerDay.weekday - 1)));
+    final weekEndSun = _dayEnd(weekStartMon.add(const Duration(days: 6)));
+    final startDay = centerDay.isAfter(today) ? centerDay : today;
+    final start = startDay == today ? now : startDay;
+
+    if (start.isAfter(weekEndSun)) {
+      // 当天已超过本周范围（极端情况：start 在下周），退化为当天
+      await _runSmartSchedule(context, rangeStart: start, rangeEnd: _dayEnd(start), scopeLabel: '本周');
+      return;
+    }
+
+    await _runSmartSchedule(context, rangeStart: start, rangeEnd: weekEndSun, scopeLabel: '本周');
   }
 
   static Future<void> runDayClearSchedule(BuildContext context, {required DateTime day}) async {
@@ -101,9 +272,20 @@ class DayWeekAiScheduler {
   }
 
   static Future<void> runWeekClearSchedule(BuildContext context, {required DateTime centerDate}) async {
-    final start = _dayStart(centerDate.subtract(Duration(days: centerDate.weekday - 1)));
-    final end = _dayEnd(start.add(const Duration(days: 6)));
-    await _runClearSchedule(context, rangeStart: start, rangeEnd: end, scopeLabel: '本周');
+    final now = DateTime.now();
+    final today = _dayStart(DateTime(now.year, now.month, now.day));
+    final centerDay = _dayStart(centerDate);
+
+    final weekStartMon = _dayStart(centerDay.subtract(Duration(days: centerDay.weekday - 1)));
+    final weekEndSun = _dayEnd(weekStartMon.add(const Duration(days: 6)));
+    final start = centerDay.isAfter(today) ? centerDay : today;
+
+    if (start.isAfter(weekEndSun)) {
+      await _runClearSchedule(context, rangeStart: start, rangeEnd: _dayEnd(start), scopeLabel: '本周');
+      return;
+    }
+
+    await _runClearSchedule(context, rangeStart: start, rangeEnd: weekEndSun, scopeLabel: '本周');
   }
 
   static Future<void> _runSmartSchedule(
@@ -167,19 +349,26 @@ class DayWeekAiScheduler {
 
     final closeLoading = _showBlockingLoading(context, 'AI 正在生成时间安排…');
     try {
+      debugPrint('[DayWeekAiScheduler] smartSchedule start scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd');
       final plan = await _callTimeBlockSchedulingAI(
         aiService: aiService,
         rangeStart: rangeStart,
         rangeEnd: rangeEnd,
         busyEvents: busyEvents,
         candidates: sourceTasks,
-      );
+      ).timeout(const Duration(seconds: 90));
+
+      debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.length}');
 
       final db = CalendarDatabaseService();
       final prefs = await SharedPreferences.getInstance();
 
       int created = 0;
-      for (final block in plan) {
+      for (int i = 0; i < plan.length; i++) {
+        final block = plan[i];
+        debugPrint(
+          '[DayWeekAiScheduler] createEvent[$i/${plan.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
+        );
         final event = CalendarEvent(
           title: block.title,
           allDay: false,
@@ -188,11 +377,14 @@ class DayWeekAiScheduler {
           start: block.start,
           end: block.end,
         );
-        final id = await db.addEventFromCalendarEvent(event);
-        await _writeEventMetaAi(prefs: prefs, eventId: id);
-        await _markTaskScheduledForDate(prefs: prefs, date: block.start, taskId: block.taskId);
+        final id = await db.addEventFromCalendarEvent(event).timeout(const Duration(seconds: 10));
+        await _writeEventMetaAi(prefs: prefs, eventId: id).timeout(const Duration(seconds: 5));
+        await _markTaskScheduledForDate(prefs: prefs, date: block.start, taskId: block.taskId).timeout(const Duration(seconds: 5));
         created++;
+        await Future<void>.delayed(Duration.zero);
       }
+
+      debugPrint('[DayWeekAiScheduler] smartSchedule created=$created');
 
       if (!context.mounted) return;
       scheduleProvider.refresh();
@@ -200,6 +392,7 @@ class DayWeekAiScheduler {
         SnackBar(content: Text('AI 已生成 $created 个时间块')),
       );
     } catch (e) {
+      debugPrint('[DayWeekAiScheduler] smartSchedule error=$e');
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI 安排失败：$e')),
@@ -231,13 +424,17 @@ class DayWeekAiScheduler {
 
     final closeLoading = _showBlockingLoading(context, '正在清空 AI 时间块…');
     try {
-      final cleared = await _clearAiEventsInRange(rangeStart: rangeStart, rangeEnd: rangeEnd);
+      debugPrint('[DayWeekAiScheduler] clearSchedule start scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd');
+      final cleared = await _clearAiEventsInRange(rangeStart: rangeStart, rangeEnd: rangeEnd)
+          .timeout(const Duration(seconds: 90));
+      debugPrint('[DayWeekAiScheduler] clearSchedule cleared=$cleared');
       if (!context.mounted) return;
       context.read<ScheduleProvider>().refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已清空 $cleared 个 AI 时间块')),
       );
     } catch (e) {
+      debugPrint('[DayWeekAiScheduler] clearSchedule error=$e');
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('清空失败：$e')),
@@ -252,18 +449,24 @@ class DayWeekAiScheduler {
     final prefs = await SharedPreferences.getInstance();
 
     final events = db.getCalendarEventsInRange(rangeStart, rangeEnd);
+    debugPrint('[DayWeekAiScheduler] clearAiEventsInRange eventsInRange=${events.length}');
     int cleared = 0;
-    for (final e in events) {
+    for (int i = 0; i < events.length; i++) {
+      final e = events[i];
       final isAi = _readEventMetaAi(prefs: prefs, eventId: e.id);
       if (!isAi) continue;
-      await db.deleteEvent(e.id);
-      await _clearEventMetaAi(prefs: prefs, eventId: e.id);
+      debugPrint(
+        '[DayWeekAiScheduler] deleteAiEvent[$i/${events.length}] eventId=${e.id} start=${e.start.toIso8601String()} end=${e.end.toIso8601String()}',
+      );
+      await db.deleteEvent(e.id).timeout(const Duration(seconds: 10));
+      await _clearEventMetaAi(prefs: prefs, eventId: e.id).timeout(const Duration(seconds: 5));
 
       final taskId = _tryExtractTaskIdFromDescription(e.description);
       if (taskId != null && taskId.isNotEmpty) {
-        await _unmarkTaskScheduledForDate(prefs: prefs, date: e.start, taskId: taskId);
+        await _unmarkTaskScheduledForDate(prefs: prefs, date: e.start, taskId: taskId).timeout(const Duration(seconds: 5));
       }
       cleared++;
+      await Future<void>.delayed(Duration.zero);
     }
     return cleared;
   }
@@ -304,12 +507,32 @@ class DayWeekAiScheduler {
     required List<CalendarEvent> busyEvents,
     required List<dynamic> candidates,
   }) async {
+    final availability = await _loadAvailability();
+
+    final prefs = await SharedPreferences.getInstance();
+
+    Map<String, dynamic>? readTaskMeta(String taskId) {
+      final raw = prefs.getString('task_meta_v1_$taskId');
+      if (raw == null || raw.trim().isEmpty) return null;
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) return null;
+        return Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        return null;
+      }
+    }
+
     final taskItems = candidates.map((t) {
       final dyn = t as dynamic;
+      final meta = readTaskMeta(dyn.id.toString());
       return {
         'id': dyn.id,
         'title': dyn.title,
-        if (dyn.description != null) 'description': dyn.description,
+        if (dyn.description != null) 'description': dyn.description, // 备注（给 AI 看）
+        if (meta?['estimatedMinutes'] != null) 'estimatedMinutes': meta?['estimatedMinutes'],
+        if (meta?['priority'] != null) 'priority': meta?['priority'],
+        if (meta?['repeat'] != null) 'repeat': meta?['repeat'],
         if (dyn.remindAt != null) 'remindAt': (dyn.remindAt as DateTime).toIso8601String(),
       };
     }).toList();
@@ -323,16 +546,86 @@ class DayWeekAiScheduler {
       };
     }).toList();
 
+    // 先按“可分配时间段 + busyEvents + rangeStart/rangeEnd”计算每天空闲时间段（不跨天），交给 AI 填充。
+    final freeWindowsByDayKey = <String, List<({DateTime start, DateTime end})>>{};
+    final freeWindowsForAi = <Map<String, dynamic>>[];
+
+    for (DateTime day = _dayStart(rangeStart); !day.isAfter(_dayStart(rangeEnd)); day = day.add(const Duration(days: 1))) {
+      final dayKey = _dateOnlyKey(day);
+      final ranges = _rangesForDate(
+        date: day,
+        weekday: availability.weekday,
+        weekend: availability.weekend,
+        workdays: availability.workdays,
+      );
+
+      final dayBusy = <({DateTime start, DateTime end})>[];
+      for (final b in busyEvents) {
+        if (b.allDay) continue;
+        if (DateTime(b.start.year, b.start.month, b.start.day) != day && DateTime(b.end.year, b.end.month, b.end.day) != day) {
+          // 快速过滤：既不是当天开始也不是当天结束的事件，后面仍会通过 overlap 校验挡住；这里先略过
+        }
+        final start = b.start;
+        final end = b.end;
+        if (!end.isAfter(start)) continue;
+        // 裁剪到当天边界
+        final ds = _dayStart(day);
+        final de = _dayEnd(day);
+        final cs = start.isBefore(ds) ? ds : start;
+        final ce = end.isAfter(de) ? de : end;
+        if (ce.isAfter(cs)) {
+          dayBusy.add((start: cs, end: ce));
+        }
+      }
+
+      final dayFree = <({DateTime start, DateTime end})>[];
+      for (final r in ranges) {
+        var ws = _applyMinutes(day, r.startMinutes);
+        var we = _applyMinutes(day, r.endMinutes);
+        if (ws.isBefore(rangeStart)) ws = rangeStart;
+        if (we.isAfter(rangeEnd)) we = rangeEnd;
+        if (!we.isAfter(ws)) continue;
+
+        final busyOverlappingWindow = dayBusy
+            .where((b) => b.start.isBefore(we) && b.end.isAfter(ws))
+            .map((b) => (
+                  start: b.start.isBefore(ws) ? ws : b.start,
+                  end: b.end.isAfter(we) ? we : b.end,
+                ))
+            .toList(growable: false);
+
+        dayFree.addAll(_subtractBusyFromWindow(windowStart: ws, windowEnd: we, busy: busyOverlappingWindow));
+      }
+
+      final mergedFree = _mergeIntervals(dayFree);
+      freeWindowsByDayKey[dayKey] = mergedFree;
+
+      freeWindowsForAi.add({
+        'date': dayKey,
+        'free': mergedFree
+            .map((w) => {
+                  'start': w.start.toIso8601String(),
+                  'end': w.end.toIso8601String(),
+                })
+            .toList(),
+      });
+    }
+
     final systemPrompt =
         '你是一个严格的“日历时间块排期引擎（Time-Block Scheduling Engine）”。\n'
         '你要把任务安排到具体的时间段中，并生成日程块。\n'
+        '你的目标是：在不违反规则的前提下，尽可能充分利用 freeWindows，把待办任务尽可能多地安排进去。\n'
+        '你可以为同一个 taskId 创建多个时间块，直到达到该任务的预计时长（estimatedMinutes）或 freeWindows 用尽。\n'
+        '时间块的长度由你自行决定：优先使用更少、更长、更连续的时间块，避免把同一任务切成过多的短碎片块。\n'
         '\n'
         '## 关键规则（必须遵守）\n'
         '1) 你不能创建新的任务，只能从 taskPool 中选择 taskId。\n'
         '2) 你必须避开 busyEvents 中的忙碌时间段，不能产生冲突。\n'
-        '3) 所有输出的 start/end 必须落在 range.start 与 range.end（含）之间。\n'
-        '4) 每个时间块必须 end > start，且建议以 15 分钟为粒度。\n'
-        '5) 你必须只输出纯 JSON，不允许输出解释/Markdown/代码块。\n'
+        '3) 所有输出的 start/end 必须落在 freeWindows 提供的空闲时间段内。\n'
+        '4) 你不能安排跨天时间块（start 与 end 必须在同一天）。\n'
+        '5) 每个时间块必须 end > start，且以 15 分钟为粒度。\n'
+        '6) 在满足规则的前提下，尽量合并相邻/连续的可用时间段，减少碎片。\n'
+        '7) 你必须只输出纯 JSON，不允许输出解释/Markdown/代码块。\n'
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
@@ -348,17 +641,22 @@ class DayWeekAiScheduler {
 
     final userPrompt = jsonEncode({
       'instruction': {
-        'goal': '在指定范围内生成不冲突的时间块，并从 taskPool 中选择任务填充。',
+        'goal': '在 freeWindows 提供的空闲时间段内，生成不冲突的时间块并分配给 taskPool 中的任务；尽可能充分利用空闲时间（排不下就跳过）。',
         'range': {
           'start': rangeStart.toIso8601String(),
           'end': rangeEnd.toIso8601String(),
         },
-        'workingHoursHint': {
-          'startHour': 9,
-          'endHour': 18,
+        'time_granularity_minutes': 15,
+        'planning_strategy': {
+          'maximize_total_scheduled_minutes': true,
+          'allow_multiple_blocks_per_task': true,
+          'prefer_longer_blocks': true,
+          'minimize_fragmentation': true,
+          'notes': '如果 taskPool 里有 estimatedMinutes，请优先按其安排；否则可根据 description 里的备注（例如“每次一两个小时”）决定更合适的时间块长度。'
         }
       },
       'busyEvents': busy,
+      'freeWindows': freeWindowsForAi,
       'taskPool': taskItems,
       'output_schema': {
         'blocks': [
@@ -387,6 +685,18 @@ class DayWeekAiScheduler {
     if (blocks is! List) throw Exception('AI 输出缺少 blocks');
 
     final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
+    final usedIntervals = <({DateTime start, DateTime end})>[];
+    final allocatedMinutesByTaskId = <String, int>{};
+    const maxBlocksPerTask = 8;
+    final blocksCountByTaskId = <String, int>{};
+
+    final estMinutesByTaskId = <String, int?>{
+      for (final item in taskItems)
+        item['id'].toString(): (item['estimatedMinutes'] is int
+            ? item['estimatedMinutes'] as int
+            : int.tryParse(item['estimatedMinutes']?.toString() ?? '')),
+    };
+
     final result = <_TimeBlockPlan>[];
     for (final item in blocks) {
       if (item is! Map) continue;
@@ -400,7 +710,60 @@ class DayWeekAiScheduler {
       final end = DateTime.tryParse(endStr);
       if (start == null || end == null) continue;
       if (!end.isAfter(start)) continue;
-      if (start.isBefore(rangeStart) || end.isAfter(rangeEnd)) continue;
+
+      if (start.isBefore(rangeStart) || end.isAfter(rangeEnd)) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of range start=$start end=$end');
+        continue;
+      }
+
+      if (start.year != end.year || start.month != end.month || start.day != end.day) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) crosses day start=$start end=$end');
+        continue;
+      }
+
+      final dayKey = _dateOnlyKey(start);
+      final dayFree = freeWindowsByDayKey[dayKey] ?? const <({DateTime start, DateTime end})>[];
+      if (!_blockWithinAnyWindow(start: start, end: end, windows: dayFree)) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of freeWindows start=$start end=$end');
+        continue;
+      }
+
+      bool overlapNew = false;
+      for (final u in usedIntervals) {
+        if (start.isBefore(u.end) && end.isAfter(u.start)) {
+          overlapNew = true;
+          break;
+        }
+      }
+      if (overlapNew) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) overlaps another new block start=$start end=$end');
+        continue;
+      }
+
+      final blockMinutes = end.difference(start).inMinutes;
+      final currentBlocks = blocksCountByTaskId[taskId] ?? 0;
+      if (currentBlocks >= maxBlocksPerTask) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) exceeds maxBlocksPerTask=$maxBlocksPerTask');
+        continue;
+      }
+
+      final est = estMinutesByTaskId[taskId];
+      if (est != null) {
+        final already = allocatedMinutesByTaskId[taskId] ?? 0;
+        if (already >= est) {
+          debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) already meets estimatedMinutes=$est');
+          continue;
+        }
+        if (already + blockMinutes > est + 15) {
+          debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) would exceed estimatedMinutes=$est');
+          continue;
+        }
+      }
+
+      if (_overlapsBusy(start: start, end: end, busyEvents: busyEvents)) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) overlaps busy start=$start end=$end');
+        continue;
+      }
 
       // 最后再做一次冲突过滤（防 AI 输出冲突）
       bool conflict = false;
@@ -411,7 +774,14 @@ class DayWeekAiScheduler {
           break;
         }
       }
-      if (conflict) continue;
+      if (conflict) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) conflicts start=$start end=$end');
+        continue;
+      }
+
+      allocatedMinutesByTaskId[taskId] = (allocatedMinutesByTaskId[taskId] ?? 0) + blockMinutes;
+      blocksCountByTaskId[taskId] = currentBlocks + 1;
+      usedIntervals.add((start: start, end: end));
 
       result.add(_TimeBlockPlan(
         taskId: taskId,
@@ -487,4 +857,26 @@ class _TimeBlockPlan {
   });
 
   String get description => 'AI安排: $taskId';
+}
+
+class _TimeRange {
+  final int startMinutes;
+  final int endMinutes;
+
+  const _TimeRange({
+    required this.startMinutes,
+    required this.endMinutes,
+  });
+
+  bool get isValid => startMinutes >= 0 && endMinutes <= 24 * 60 && endMinutes > startMinutes;
+
+  String formatStart() => _formatMinutes(startMinutes);
+
+  String formatEnd() => _formatMinutes(endMinutes);
+
+  static String _formatMinutes(int minutes) {
+    final h = (minutes ~/ 60).toString().padLeft(2, '0');
+    final m = (minutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 }

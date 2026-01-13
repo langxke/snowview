@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'schedule/models.dart';
 import 'schedule/widgets.dart';
@@ -297,6 +299,83 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           onSelectEvent: (event) => setState(() => _selectedEvent = event),
           onClearSelection: () => setState(() => _selectedEvent = null),
         );
+      case CalendarView.month:
+        final taskListProvider = context.watch<TaskListProvider>();
+        final gridRange = _monthGridRange(year: _year, month: _month);
+        return FutureBuilder<Map<String, List<String>>>(
+          future: () async {
+            final prefs = await SharedPreferences.getInstance();
+            final Map<String, List<String>> todosByDate = {};
+
+            final Map<String, Set<String>> scheduledTaskIdsByDate = <String, Set<String>>{};
+            final gridStart = gridRange.start;
+            final gridEndExclusive = gridRange.end;
+            for (final e in allEvents) {
+              if (e.allDay) continue;
+              final taskId = _tryExtractTaskIdFromDescription(e.description);
+              if (taskId == null || taskId.trim().isEmpty) continue;
+              var day = _dateOnly(e.start);
+              var last = _dateOnly(e.end);
+              if (last.isBefore(day)) continue;
+              if (day.isBefore(gridStart)) day = gridStart;
+              final gridLast = _dateOnly(gridEndExclusive.subtract(const Duration(days: 1)));
+              if (last.isAfter(gridLast)) last = gridLast;
+              for (DateTime d = day; !d.isAfter(last); d = d.add(const Duration(days: 1))) {
+                final key = _dateKey(d);
+                (scheduledTaskIdsByDate[key] ??= <String>{}).add(taskId);
+              }
+            }
+
+            for (final t in taskListProvider.tasks) {
+              if (t.isCompleted) continue;
+
+              // 1) 普通任务：使用 dueDate（单日期）
+              final due = t.dueDate;
+              if (due != null) {
+                final dueDay = _dateOnly(due);
+                if (!dueDay.isBefore(gridRange.start) && dueDay.isBefore(gridRange.end)) {
+                  final key = _dateKey(dueDay);
+                  if (scheduledTaskIdsByDate[key]?.contains(t.id) != true) {
+                    (todosByDate[key] ??= <String>[]).add(t.title);
+                  }
+                }
+              }
+
+              // 2) 循环任务：AI 可能写入多个日期到 task_meta aiDueDates
+              final raw = prefs.getString('task_meta_v1_${t.id}');
+              if (raw == null || raw.trim().isEmpty) continue;
+              try {
+                final decoded = jsonDecode(raw);
+                if (decoded is! Map) continue;
+                final v = decoded['aiDueDates'];
+                if (v is! List) continue;
+                for (final item in v) {
+                  final parsed = DateTime.tryParse(item.toString());
+                  if (parsed == null) continue;
+                  final day = _dateOnly(parsed);
+                  if (day.isBefore(gridRange.start) || !day.isBefore(gridRange.end)) continue;
+                  final key = _dateKey(day);
+                  if (scheduledTaskIdsByDate[key]?.contains(t.id) == true) continue;
+                  (todosByDate[key] ??= <String>[]).add(t.title);
+                }
+              } catch (_) {
+                continue;
+              }
+            }
+
+            return todosByDate;
+          }(),
+          builder: (context, snapshot) {
+            final todosByDate = snapshot.data ?? const <String, List<String>>{};
+            return MonthView(
+              year: _year,
+              month: _month,
+              events: allEvents,
+              todosByDate: todosByDate,
+              onAddEvent: _openAddEventDialog,
+            );
+          },
+        );
       case CalendarView.week:
         return WeekView(
           centerDate: _selected,
@@ -306,34 +385,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           onDeleteEvent: _deleteEvent,
           onSelectEvent: (event) => setState(() => _selectedEvent = event),
           onClearSelection: () => setState(() => _selectedEvent = null),
-        );
-      case CalendarView.month:
-        final taskListProvider = context.watch<TaskListProvider>();
-        final gridRange = _monthGridRange(year: _year, month: _month);
-        final scheduledTaskIds = <String>{
-          for (final e in allEvents)
-            if (!e.allDay) ...[
-              if (_tryExtractTaskIdFromDescription(e.description) != null)
-                _tryExtractTaskIdFromDescription(e.description)!,
-            ],
-        };
-        final Map<String, List<String>> todosByDate = {};
-        for (final t in taskListProvider.tasks) {
-          if (t.isCompleted) continue;
-          if (scheduledTaskIds.contains(t.id)) continue;
-          final due = t.dueDate;
-          if (due == null) continue;
-          final dueDay = _dateOnly(due);
-          if (dueDay.isBefore(gridRange.start) || !dueDay.isBefore(gridRange.end)) continue;
-          final key = _dateKey(dueDay);
-          (todosByDate[key] ??= <String>[]).add(t.title);
-        }
-        return MonthView(
-          year: _year,
-          month: _month,
-          events: allEvents,
-          todosByDate: todosByDate,
-          onAddEvent: _openAddEventDialog,
         );
     }
   }

@@ -99,6 +99,7 @@ class TaskListProvider extends ChangeNotifier {
   }
 
   static const String _taskMetaPrefsPrefix = 'task_meta_v1_';
+  static const String _aiScheduledTaskIdsByDatePrefix = 'ai_scheduled_task_ids_v1_';
 
   Future<bool> isTaskRecurring(String taskId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -124,13 +125,27 @@ class TaskListProvider extends ChangeNotifier {
         final decoded = jsonDecode(raw);
         if (decoded is! Map) continue;
         final rep = decoded['repeat']?.toString();
-        if (rep == null || rep.trim().isEmpty) continue;
-        ids.add(t.id);
+        if (rep != null && rep.trim().isNotEmpty && rep.trim() != 'none') {
+          ids.add(t.id);
+        }
       } catch (_) {
-        // ignore invalid meta
+        continue;
       }
     }
     return ids;
+  }
+
+  Future<Set<String>> getTimeBlockScheduledTaskIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys();
+    final result = <String>{};
+    for (final k in keys) {
+      if (!k.startsWith(_aiScheduledTaskIdsByDatePrefix)) continue;
+      final ids = prefs.getStringList(k);
+      if (ids == null || ids.isEmpty) continue;
+      result.addAll(ids);
+    }
+    return result;
   }
   
   // ==================== 初始化和加载 ====================
