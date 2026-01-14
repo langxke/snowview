@@ -15,6 +15,7 @@ import 'shared/handlers/event_move_handler.dart';
 import 'shared/handlers/time_selection_handler.dart';
 import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
+import 'now_indicator_painter.dart';
 import '../../providers/task_list_provider.dart';
 import 'day_week_ai_scheduler.dart';
 
@@ -46,6 +47,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	bool _isTodayTodosExpanded = true;
 	Timer? _nowTimer;
 	DateTime _now = DateTime.now();
+	final ValueNotifier<DateTime> _nowVN = ValueNotifier<DateTime>(DateTime.now());
 
 	bool get _isShowingNowIndicator {
 		final n = DateTime.now();
@@ -194,7 +196,8 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 		_nowTimer = Timer(delay, () {
 			if (!mounted) return;
 			final n = DateTime.now();
-			setState(() => _now = n);
+			_now = n;
+			_nowVN.value = n;
 			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
 				if (!mounted) return;
 				if (!_isShowingNowIndicator) {
@@ -207,84 +210,10 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 				if (nn.year == prev.year && nn.month == prev.month && nn.day == prev.day && nn.hour == prev.hour && nn.minute == prev.minute) {
 					return;
 				}
-				setState(() => _now = nn);
+				_now = nn;
+				_nowVN.value = nn;
 			});
 		});
-	}
-
-	List<Widget> _buildNowIndicator(
-		List<DateTime> days,
-		BoxConstraints constraints, {
-		required int todayIndex,
-	}) {
-		final y = TimeUtils.timeToY(_now);
-		final hh = _now.hour.toString().padLeft(2, '0');
-		final mm = _now.minute.toString().padLeft(2, '0');
-		final timeText = '$hh:$mm';
-
-		final showLines = todayIndex >= 0;
-		final availableWidth = constraints.maxWidth - CalendarConstants.gutterWidth;
-		final columnWidth = availableWidth / 7;
-		final todayLeft = CalendarConstants.gutterWidth + todayIndex * columnWidth;
-
-		final widgets = <Widget>[
-			// 时间标签：不管是不是本周都显示
-			Positioned(
-				top: y - 9,
-				left: 0,
-				width: CalendarConstants.gutterWidth,
-				child: IgnorePointer(
-					child: Align(
-						alignment: Alignment.centerRight,
-						child: Container(
-							padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-							decoration: BoxDecoration(
-								color: Colors.red,
-								borderRadius: BorderRadius.circular(4),
-							),
-							child: Text(
-								timeText,
-								style: const TextStyle(
-									color: Colors.white,
-									fontSize: 11,
-									fontWeight: FontWeight.w600,
-								),
-							),
-						),
-					),
-				),
-			),
-		];
-
-		if (showLines) {
-			const thinHeight = 1.5;
-			const thickHeight = 3.0;
-			// 贯穿全周的细红线
-			widgets.add(
-				Positioned(
-					top: y - thinHeight / 2,
-					left: CalendarConstants.gutterWidth,
-					right: 0,
-					child: IgnorePointer(
-						child: Container(height: thinHeight, color: Colors.red),
-					),
-				),
-			);
-
-			// 今天列范围内更粗一点
-			widgets.add(
-				Positioned(
-					top: y - thickHeight / 2,
-					left: todayLeft,
-					width: columnWidth,
-					child: IgnorePointer(
-						child: Container(height: thickHeight, color: Colors.red),
-					),
-				),
-			);
-		}
-
-		return widgets;
 	}
 	
 	// ============ 初始化和清理 ============
@@ -309,6 +238,7 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 	@override
 	void dispose() {
 		_nowTimer?.cancel();
+		_nowVN.dispose();
 		disposeCalendarState();
 		super.dispose();
 	}
@@ -421,13 +351,17 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 				// 主体：按小时网格
 				Expanded(
 					child: SingleChildScrollView(
-					child: LayoutBuilder(
-						builder: (context, constraints) {
-							// 缓存当前约束信息
-							updateConstraints(constraints);
-							return Stack(
-								key: stackKey,
-								children: [
+						child: LayoutBuilder(
+							builder: (context, constraints) {
+								// 缓存当前约束信息
+								updateConstraints(constraints);
+								final showLines = todayIndex >= 0;
+								final availableWidth = constraints.maxWidth - CalendarConstants.gutterWidth;
+								final columnWidth = availableWidth / 7;
+								final todayLeft = CalendarConstants.gutterWidth + todayIndex * columnWidth;
+								return Stack(
+									key: stackKey,
+									children: [
 										Column(
 											children: List.generate(24, (hour) {
 												return SizedBox(
@@ -495,15 +429,25 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 										..._buildEventBlocks(days, constraints),
 										// 空白区域手势检测层
 										..._buildEmptyAreaGestureDetectors(days, constraints),
-										..._buildNowIndicator(days, constraints, todayIndex: todayIndex),
+										if (showLines)
+											Positioned.fill(
+												child: NowIndicatorPaintLayer(
+													nowListenable: _nowVN,
+													showLine: true,
+													showThickTodayLine: true,
+													gutterWidth: CalendarConstants.gutterWidth,
+													todayLeft: todayLeft,
+													todayWidth: columnWidth,
+												),
+											),
 									],
 								);
-							}
-						),
+						},
 					),
 				),
-			],
-				),
+			),
+		],
+	),
 			),
 		);
 	}

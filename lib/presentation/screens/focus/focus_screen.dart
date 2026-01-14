@@ -203,6 +203,11 @@ class _FocusScreenState extends State<FocusScreen> {
     required String? plannedTaskId,
     required CalendarEvent? plannedEvent,
   }) {
+    final buttonTextStyle = Theme.of(context).textTheme.labelLarge?.copyWith(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+        );
+
     if (isFreeTime) {
       return Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -211,7 +216,7 @@ class _FocusScreenState extends State<FocusScreen> {
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
               minimumSize: const Size(220, 52),
-              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              textStyle: buttonTextStyle,
             ),
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -232,6 +237,7 @@ class _FocusScreenState extends State<FocusScreen> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         FilledButton(
+          style: FilledButton.styleFrom(textStyle: buttonTextStyle),
           onPressed: () => _handleComplete(context, taskId: plannedTaskId, plannedEvent: plannedEvent),
           child: const Text('完成'),
         ),

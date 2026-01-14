@@ -15,6 +15,7 @@ import 'shared/handlers/event_move_handler.dart';
 import 'shared/handlers/time_selection_handler.dart';
 import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
+import 'now_indicator_painter.dart';
 import '../../providers/task_list_provider.dart';
 import 'day_week_ai_scheduler.dart';
 
@@ -46,6 +47,7 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	bool _isTodayTodosExpanded = true;
 	Timer? _nowTimer;
 	DateTime _now = DateTime.now();
+	final ValueNotifier<DateTime> _nowVN = ValueNotifier<DateTime>(DateTime.now());
 
 	bool get _isViewingToday {
 		final n = DateTime.now();
@@ -159,6 +161,7 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	@override
 	void dispose() {
 		_nowTimer?.cancel();
+		_nowVN.dispose();
 		disposeCalendarState();
 		super.dispose();
 	}
@@ -168,9 +171,6 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	@override
 	Widget build(BuildContext context) {
 		final theme = Theme.of(context);
-		final now = _now;
-		final today = DateTime(now.year, now.month, now.day);
-		final isViewingToday = widget.date.year == today.year && widget.date.month == today.month && widget.date.day == today.day;
 		bool inRange(DateTime d, DateTime a, DateTime b) {
 			final dd = DateTime(d.year, d.month, d.day);
 			final aa = DateTime(a.year, a.month, a.day);
@@ -333,7 +333,15 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 								..._buildEventBlocks(),
 								// 空白区域手势检测层
 								..._buildEmptyAreaGestureDetectors(),
-								..._buildNowIndicator(showLine: isViewingToday),
+								if (_isViewingToday)
+									Positioned.fill(
+										child: NowIndicatorPaintLayer(
+											nowListenable: _nowVN,
+											showLine: true,
+											showThickTodayLine: false,
+											gutterWidth: CalendarConstants.gutterWidth,
+										),
+									),
 							],
 						),
 					),
@@ -356,7 +364,8 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 		_nowTimer = Timer(delay, () {
 			if (!mounted) return;
 			final n = DateTime.now();
-			setState(() => _now = n);
+			_now = n;
+			_nowVN.value = n;
 			_nowTimer = Timer.periodic(const Duration(minutes: 1), (_) {
 				if (!mounted) return;
 				if (!_isViewingToday) {
@@ -369,62 +378,10 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 				if (nn.year == prev.year && nn.month == prev.month && nn.day == prev.day && nn.hour == prev.hour && nn.minute == prev.minute) {
 					return;
 				}
-				setState(() => _now = nn);
+				_now = nn;
+				_nowVN.value = nn;
 			});
 		});
-	}
-
-	List<Widget> _buildNowIndicator({required bool showLine}) {
-		final y = TimeUtils.timeToY(_now);
-		final hh = _now.hour.toString().padLeft(2, '0');
-		final mm = _now.minute.toString().padLeft(2, '0');
-		final timeText = '$hh:$mm';
-
-		final widgets = <Widget>[
-			Positioned(
-				top: y - 9,
-				left: 0,
-				width: CalendarConstants.gutterWidth,
-				child: IgnorePointer(
-					child: Align(
-						alignment: Alignment.centerRight,
-						child: Container(
-							padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-							decoration: BoxDecoration(
-								color: Colors.red,
-								borderRadius: BorderRadius.circular(4),
-							),
-							child: Text(
-								timeText,
-								style: const TextStyle(
-									color: Colors.white,
-									fontSize: 11,
-									fontWeight: FontWeight.w600,
-								),
-							),
-						),
-					),
-				),
-			),
-		];
-
-		if (showLine) {
-			widgets.add(
-				Positioned(
-					top: y,
-					left: CalendarConstants.gutterWidth,
-					right: 0,
-					child: IgnorePointer(
-						child: Container(
-							height: 2,
-							color: Colors.red,
-						),
-					),
-				),
-			);
-		}
-
-		return widgets;
 	}
 	
 	// ============ 辅助方法 ============
