@@ -114,6 +114,13 @@ class DayWeekAiScheduler {
     if (workdaysParsed == null) {
       debugPrint('[DayWeekAiScheduler] availability workdays parse failed, fallback to default. raw=${workdaysRaw ?? const <String>[]}'.toString());
     }
+
+		debugPrint(
+			'[DayWeekAiScheduler] availability loaded '
+			'weekday=${weekday.map((e) => '${e.formatStart()}-${e.formatEnd()}').toList(growable: false)} '
+			'weekend=${weekend.map((e) => '${e.formatStart()}-${e.formatEnd()}').toList(growable: false)} '
+			'workdays=$workdays',
+		);
     return (weekday: weekday, weekend: weekend, workdays: workdays);
   }
 
@@ -140,6 +147,19 @@ class DayWeekAiScheduler {
     }
     return false;
   }
+
+	static bool _blockWithinAnyRange({
+		required DateTime start,
+		required DateTime end,
+		required List<_TimeRange> ranges,
+	}) {
+		final startM = start.hour * 60 + start.minute;
+		final endM = end.hour * 60 + end.minute;
+		for (final r in ranges) {
+			if (startM >= r.startMinutes && endM <= r.endMinutes) return true;
+		}
+		return false;
+	}
 
   static List<({DateTime start, DateTime end})> _mergeIntervals(List<({DateTime start, DateTime end})> intervals) {
     if (intervals.isEmpty) return const [];
@@ -304,21 +324,88 @@ class DayWeekAiScheduler {
     }
 
     final taskProvider = context.read<TaskListProvider>();
-    final dueInRangeTasks = taskProvider.tasks
-        .where((t) => !t.isCompleted)
-        .where((t) {
-          final due = (t as dynamic).dueDate as DateTime?;
-          if (due == null) return false;
-          return !due.isBefore(rangeStart) && !due.isAfter(rangeEnd);
-        })
-        .toList();
+    final prefs = await SharedPreferences.getInstance();
 
-    final unscheduledTasks = taskProvider.tasks
-        .where((t) => !t.isCompleted)
-        .where((t) => (t as dynamic).dueDate == null)
-        .toList();
+    int getTaskPriority(dynamic t) {
+      // 尝试从 SharedPreferences 读取 meta (与 _callTimeBlockSchedulingAI 保持一致)
+      final raw = prefs.getString('task_meta_v1_${t.id}');
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map && decoded['priority'] is int) {
+            return decoded['priority'];
+          }
+        } catch (_) {}
+      }
+      // 如果没有 meta，尝试读取对象上的 priority 属性，默认为 0 (低)
+      // 假设 Task 对象有 priority 字段，且 2=High, 1=Medium, 0=Low
+      try {
+        return (t as dynamic).priority ?? 0;
+      } catch (_) {
+        return 0;
+      }
+    }
 
-    final sourceTasks = <dynamic>[...dueInRangeTasks, ...unscheduledTasks];
+    // Helper: 判断任务是否为循环任务
+    // 循环任务的 repeat 规则存储在 SharedPreferences 中
+    bool isRecurringTask(dynamic t) {
+      final raw = prefs.getString('task_meta_v1_${t.id}');
+      if (raw == null || raw.trim().isEmpty) return false;
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) return false;
+        final rep = decoded['repeat']?.toString();
+        return rep != null && rep.isNotEmpty && rep != 'none';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    final allTasks = taskProvider.tasks.where((t) => !t.isCompleted).toList();
+
+    // 1. 包含过期任务：只要截止日期不晚于 rangeEnd (且未完成)，都应纳入调度
+    // 原逻辑 !due.isBefore(rangeStart) 会导致昨天截止的任务被丢弃，现已修正。
+    // 【修正】：对于循环任务，如果已过期且未完成，应予以排除，防止堆积。
+    final datedTasks = allTasks.where((t) {
+      final due = (t as dynamic).dueDate as DateTime?;
+      if (due == null) return false;
+      
+      // 如果截止日期在范围之后，肯定不选
+      if (due.isAfter(rangeEnd)) return false;
+
+      // 如果截止日期在 rangeStart 之前（即已过期）
+      if (due.isBefore(rangeStart)) {
+        // 如果是循环任务，则跳过（不处理过期循环任务）
+        if (isRecurringTask(t)) return false;
+      }
+      
+      return true;
+    }).toList();
+
+    // 2. 无截止日任务
+    final noDateTasks = allTasks.where((t) => (t as dynamic).dueDate == null).toList();
+
+    // 3. 排序：优先级(高->低) > 截止日期(早->晚)
+    datedTasks.sort((a, b) {
+      final pA = getTaskPriority(a);
+      final pB = getTaskPriority(b);
+      if (pA != pB) return pB.compareTo(pA); // Descending (2 > 1 > 0)
+      final dueA = (a as dynamic).dueDate as DateTime;
+      final dueB = (b as dynamic).dueDate as DateTime;
+      return dueA.compareTo(dueB); // Ascending
+    });
+
+    noDateTasks.sort((a, b) {
+      final pA = getTaskPriority(a);
+      final pB = getTaskPriority(b);
+      return pB.compareTo(pA);
+    });
+
+    // 4. 合并与截断 (Top 50)
+    final sourceTasks = <dynamic>[...datedTasks, ...noDateTasks];
+    if (sourceTasks.length > 50) {
+      sourceTasks.length = 50;
+    }
 
     if (sourceTasks.isEmpty) {
       if (!context.mounted) return;
@@ -614,18 +701,25 @@ class DayWeekAiScheduler {
     final systemPrompt =
         '你是一个严格的“日历时间块排期引擎（Time-Block Scheduling Engine）”。\n'
         '你要把任务安排到具体的时间段中，并生成日程块。\n'
-        '你的目标是：在不违反规则的前提下，尽可能充分利用 freeWindows，把待办任务尽可能多地安排进去。\n'
-        '你可以为同一个 taskId 创建多个时间块，直到达到该任务的预计时长（estimatedMinutes）或 freeWindows 用尽。\n'
-        '时间块的长度由你自行决定：优先使用更少、更长、更连续的时间块，避免把同一任务切成过多的短碎片块。\n'
+        '你的目标是：在不违反规则的前提下，最大化利用 freeWindows（空闲时间），实现紧凑安排（Tight Scheduling）。\n'
+        '不要预留缓冲空隙（除非无任务可排），尽可能填满所有空闲时间。\n'
+        '\n'
+        '## 核心策略（Core Strategy）\n'
+        '1. **要事优先**：严格遵守任务优先级。高优先级任务必须优先安排，且应分配到精力最好的时段。\n'
+        '2. **90分钟法则**：单个时间块的最长持续时间不得超过 90 分钟。\n'
+        '   - 如果任务预估耗时 > 90 分钟，必须将其拆分为多个时间块。\n'
+        '3. **穿插调度 (Interleaving)**：\n'
+        '   - 当长任务被拆分时（如 A1, A2），尽量在它们之间插入一个短任务或不同类型的任务（如 B），形成 A -> B -> A 的模式，以缓解疲劳。\n'
+        '   - 避免连续安排超过 3 小时的同一任务（即避免 A -> A -> A）。\n'
+        '4. **紧凑排列**：不要在时间块之间人为制造空隙。End(Block N) 应等于 Start(Block N+1)。\n'
         '\n'
         '## 关键规则（必须遵守）\n'
         '1) 你不能创建新的任务，只能从 taskPool 中选择 taskId。\n'
         '2) 你必须避开 busyEvents 中的忙碌时间段，不能产生冲突。\n'
         '3) 所有输出的 start/end 必须落在 freeWindows 提供的空闲时间段内。\n'
         '4) 你不能安排跨天时间块（start 与 end 必须在同一天）。\n'
-        '5) 每个时间块必须 end > start，且以 15 分钟为粒度。\n'
-        '6) 在满足规则的前提下，尽量合并相邻/连续的可用时间段，减少碎片。\n'
-        '7) 你必须只输出纯 JSON，不允许输出解释/Markdown/代码块。\n'
+        '5) 每个时间块必须 end > start，且以 15 分钟为粒度；并且每个时间块的时长必须 >= 15 分钟。\n'
+        '6) 你必须只输出纯 JSON，不允许输出解释/Markdown/代码块。\n'
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
@@ -641,7 +735,7 @@ class DayWeekAiScheduler {
 
     final userPrompt = jsonEncode({
       'instruction': {
-        'goal': '在 freeWindows 提供的空闲时间段内，生成不冲突的时间块并分配给 taskPool 中的任务；尽可能充分利用空闲时间（排不下就跳过）。',
+        'goal': '在 freeWindows 内生成紧凑的时间安排。优先完成高优先级任务；利用穿插策略缓解长任务疲劳；最大化时间利用率。',
         'range': {
           'start': rangeStart.toIso8601String(),
           'end': rangeEnd.toIso8601String(),
@@ -650,9 +744,12 @@ class DayWeekAiScheduler {
         'planning_strategy': {
           'maximize_total_scheduled_minutes': true,
           'allow_multiple_blocks_per_task': true,
-          'prefer_longer_blocks': true,
-          'minimize_fragmentation': true,
-          'notes': '如果 taskPool 里有 estimatedMinutes，请优先按其安排；否则可根据 description 里的备注（例如“每次一两个小时”）决定更合适的时间块长度。'
+          'max_block_duration_minutes': 90,
+          'interleave_long_tasks': true,
+          'prefer_tight_scheduling': true,
+          'minimize_gaps': true,
+          'balance_strategy': 'priority_based',
+          'notes': '任务已按优先级和截止日期排序。请优先安排列表靠前的任务。如果任务需时较长，请拆分并尝试穿插其他短任务。'
         }
       },
       'busyEvents': busy,
@@ -698,6 +795,17 @@ class DayWeekAiScheduler {
     };
 
     final result = <_TimeBlockPlan>[];
+
+    // Helper: 强制将 AI 返回的时间视为本地 Wall-Clock Time
+    // AI 往往会给时间加上 'Z' 后缀（因为 prompt 要求 ISO8601），但实际上它是基于 prompt 里的本地时间生成的。
+    // 如果直接解析为 UTC，会导致时区偏移（例如 UTC+8 会偏 8 小时），从而导致此时间块与 freeWindows（本地时间）对不上。
+    DateTime? parseAsLocal(String? s) {
+      if (s == null) return null;
+      final d = DateTime.tryParse(s);
+      if (d == null) return null;
+      return DateTime(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond);
+    }
+
     for (final item in blocks) {
       if (item is! Map) continue;
       final taskId = item['taskId']?.toString();
@@ -706,8 +814,8 @@ class DayWeekAiScheduler {
       final endStr = item['end']?.toString();
       if (taskId == null || title == null || startStr == null || endStr == null) continue;
       if (!allowedIds.contains(taskId)) continue;
-      final start = DateTime.tryParse(startStr);
-      final end = DateTime.tryParse(endStr);
+      final start = parseAsLocal(startStr);
+      final end = parseAsLocal(endStr);
       if (start == null || end == null) continue;
       if (!end.isAfter(start)) continue;
 
@@ -718,6 +826,17 @@ class DayWeekAiScheduler {
 
       if (start.year != end.year || start.month != end.month || start.day != end.day) {
         debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) crosses day start=$start end=$end');
+        continue;
+      }
+
+      final baseRanges = _rangesForDate(
+        date: start,
+        weekday: availability.weekday,
+        weekend: availability.weekend,
+        workdays: availability.workdays,
+      );
+      if (!_blockWithinAnyRange(start: start, end: end, ranges: baseRanges)) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of availabilityRanges start=$start end=$end');
         continue;
       }
 
@@ -741,6 +860,10 @@ class DayWeekAiScheduler {
       }
 
       final blockMinutes = end.difference(start).inMinutes;
+      if (blockMinutes < 15) {
+        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) too short minutes=$blockMinutes start=$start end=$end');
+        continue;
+      }
       final currentBlocks = blocksCountByTaskId[taskId] ?? 0;
       if (currentBlocks >= maxBlocksPerTask) {
         debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) exceeds maxBlocksPerTask=$maxBlocksPerTask');

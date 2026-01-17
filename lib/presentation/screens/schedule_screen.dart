@@ -74,7 +74,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       case CalendarView.day:
         return scheduleProvider.getEventsForDate(_selected);
       case CalendarView.week:
-        final weekStart = _selected.subtract(Duration(days: _selected.weekday - 1));
+        final selectedDay = DateTime(_selected.year, _selected.month, _selected.day);
+        final weekStart = selectedDay.subtract(Duration(days: selectedDay.weekday - 1));
         final weekEnd = weekStart.add(const Duration(days: 7));
         return scheduleProvider.getEventsInRange(weekStart, weekEnd);
       case CalendarView.month:
