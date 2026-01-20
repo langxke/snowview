@@ -274,9 +274,9 @@ class EventSidebar extends StatelessWidget {
     final minutes = duration.inMinutes % 60;
     
     if (hours > 0) {
-      return minutes > 0 ? '${hours}小时${minutes}分钟' : '${hours}小时';
+      return minutes > 0 ? '$hours小时$minutes分钟' : '$hours小时';
     } else {
-      return '${minutes}分钟';
+      return '$minutes分钟';
     }
   }
 
@@ -495,7 +495,7 @@ class _EditableDescriptionState extends State<_EditableDescription> {
     if (_isEditing) {
       return Container(
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: theme.colorScheme.primary),
         ),
@@ -525,7 +525,7 @@ class _EditableDescriptionState extends State<_EditableDescription> {
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(

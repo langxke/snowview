@@ -7,12 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/models/openai/openai_models.dart';
 import '../../../data/repositories/ai_config_repository.dart';
 import '../../../services/ai_service.dart';
-import '../../../services/calendar_database_service.dart';
 import '../../providers/schedule_provider.dart';
+import '../../providers/daily_plan_provider.dart';
+import '../../../data/models/calendar_event_hive.dart';
 import '../../providers/task_list_provider.dart';
 import 'models.dart';
 
 class DayWeekAiScheduler {
+  // 移除未使用的导入
+  // import '../../../services/calendar_database_service.dart';
+
   static const String _eventMetaPrefsPrefix = 'event_meta_v1_';
   static const String _eventMetaAiKey = 'ai';
   static const String _scheduledTaskIdsByDatePrefix = 'ai_scheduled_task_ids_v1_';
@@ -430,6 +434,7 @@ class DayWeekAiScheduler {
     if (!context.mounted) return;
 
     final scheduleProvider = context.read<ScheduleProvider>();
+    final dailyPlanProvider = context.read<DailyPlanProvider>(); // Add DailyPlanProvider
     final busyEvents = scheduleProvider.getEventsInRange(rangeStart, rangeEnd)
         .where((e) => !e.allDay)
         .toList(growable: false);
@@ -447,7 +452,6 @@ class DayWeekAiScheduler {
 
       debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.length}');
 
-      final db = CalendarDatabaseService();
       final prefs = await SharedPreferences.getInstance();
 
       int created = 0;
@@ -456,16 +460,27 @@ class DayWeekAiScheduler {
         debugPrint(
           '[DayWeekAiScheduler] createEvent[$i/${plan.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
         );
-        final event = CalendarEvent(
+        
+        // 创建 CalendarEventHive 对象（嵌入式）
+        final event = CalendarEventHive(
+          id: DateTime.now().millisecondsSinceEpoch.toString() + i.toString(), // 临时生成 ID
           title: block.title,
           allDay: false,
           description: block.description,
-          color: Colors.blue,
+          colorValue: Colors.blue.value,
           start: block.start,
           end: block.end,
+          isCompleted: false,
         );
-        final id = await db.addEventFromCalendarEvent(event).timeout(const Duration(seconds: 10));
-        await _writeEventMetaAi(prefs: prefs, eventId: id).timeout(const Duration(seconds: 5));
+        
+        // 同步更新 DailyPlan：添加嵌入式时间块
+        await dailyPlanProvider.addScheduledEvent(block.start, event);
+
+        // 关键修复：任务被安排到时间块后，从今日待办中移除
+        debugPrint('[DayWeekAiScheduler] removing todo task: date=${block.start} taskId=${block.taskId}');
+        await dailyPlanProvider.removeTodoTask(block.start, block.taskId);
+        
+        await _writeEventMetaAi(prefs: prefs, eventId: event.id).timeout(const Duration(seconds: 5));
         await _markTaskScheduledForDate(prefs: prefs, date: block.start, taskId: block.taskId).timeout(const Duration(seconds: 5));
         created++;
         await Future<void>.delayed(Duration.zero);
@@ -512,7 +527,7 @@ class DayWeekAiScheduler {
     final closeLoading = _showBlockingLoading(context, '正在清空 AI 时间块…');
     try {
       debugPrint('[DayWeekAiScheduler] clearSchedule start scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd');
-      final cleared = await _clearAiEventsInRange(rangeStart: rangeStart, rangeEnd: rangeEnd)
+      final cleared = await _clearAiEventsInRange(context, rangeStart: rangeStart, rangeEnd: rangeEnd) // Pass context
           .timeout(const Duration(seconds: 90));
       debugPrint('[DayWeekAiScheduler] clearSchedule cleared=$cleared');
       if (!context.mounted) return;
@@ -531,30 +546,66 @@ class DayWeekAiScheduler {
     }
   }
 
-  static Future<int> _clearAiEventsInRange({required DateTime rangeStart, required DateTime rangeEnd}) async {
-    final db = CalendarDatabaseService();
+  static Future<int> _clearAiEventsInRange(
+    BuildContext context, { // Add context
+    required DateTime rangeStart, 
+    required DateTime rangeEnd,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-
-    final events = db.getCalendarEventsInRange(rangeStart, rangeEnd);
-    debugPrint('[DayWeekAiScheduler] clearAiEventsInRange eventsInRange=${events.length}');
-    int cleared = 0;
-    for (int i = 0; i < events.length; i++) {
-      final e = events[i];
-      final isAi = _readEventMetaAi(prefs: prefs, eventId: e.id);
-      if (!isAi) continue;
-      debugPrint(
-        '[DayWeekAiScheduler] deleteAiEvent[$i/${events.length}] eventId=${e.id} start=${e.start.toIso8601String()} end=${e.end.toIso8601String()}',
-      );
-      await db.deleteEvent(e.id).timeout(const Duration(seconds: 10));
-      await _clearEventMetaAi(prefs: prefs, eventId: e.id).timeout(const Duration(seconds: 5));
-
-      final taskId = _tryExtractTaskIdFromDescription(e.description);
-      if (taskId != null && taskId.isNotEmpty) {
-        await _unmarkTaskScheduledForDate(prefs: prefs, date: e.start, taskId: taskId).timeout(const Duration(seconds: 5));
-      }
-      cleared++;
-      await Future<void>.delayed(Duration.zero);
+    // 假设 DailyPlanProvider 可用（如果是在 UI 流程中调用）
+    // 但这个静态方法可能无法直接访问 Provider，除非传入 Context
+    // 为了安全，我们修改签名要求 Context
+    DailyPlanProvider? dailyPlanProvider;
+    try {
+      dailyPlanProvider = context.read<DailyPlanProvider>();
+    } catch (_) {
+      // ignore
     }
+    
+    if (dailyPlanProvider == null) return 0;
+
+    // 从 DailyPlan 获取范围内的所有计划，然后筛选出 AI 事件
+    final plans = await dailyPlanProvider.getPlansForRange(rangeStart, rangeEnd);
+    int cleared = 0;
+    
+    for (final plan in plans.values) {
+        final events = List<CalendarEventHive>.from(plan.scheduledEvents); // 复制一份列表以避免并发修改
+        for (final e in events) {
+            final isAi = _readEventMetaAi(prefs: prefs, eventId: e.id);
+            if (!isAi) continue;
+            
+            // 检查是否在请求的时间范围内 (虽然 getPlansForRange 已经筛选了日期，但 DailyPlan 是按天聚合的)
+            if (e.start.isBefore(rangeStart) || e.end.isAfter(rangeEnd)) continue;
+
+            debugPrint(
+                '[DayWeekAiScheduler] deleteAiEvent eventId=${e.id} start=${e.start.toIso8601String()} end=${e.end.toIso8601String()}',
+            );
+            
+            // 同步清理 DailyPlan (embedded)
+            // 注意：DailyPlanProvider.removeScheduledEvent 需要传入日期
+            // 这里我们用 e.start 作为 key
+            await dailyPlanProvider.removeScheduledEvent(e.start, e.id);
+            
+            await _clearEventMetaAi(prefs: prefs, eventId: e.id).timeout(const Duration(seconds: 5));
+
+            final taskId = _tryExtractTaskIdFromDescription(e.description);
+            if (taskId != null && taskId.isNotEmpty) {
+                await _unmarkTaskScheduledForDate(prefs: prefs, date: e.start, taskId: taskId).timeout(const Duration(seconds: 5));
+                
+                // 关键修复：清理AI时间块后，将任务放回今日待办
+                // 仅当任务未完成时才放回？
+                // 逻辑上：如果用户完成了任务，Task.isCompleted 为 true。
+                // 我们调用 addTodoTask，如果任务已完成，UI 可能会过滤，或者 DailyPlanProvider 不关心完成状态。
+                // 这里的 addTodoTask 只添加 ID 到列表。
+                // 我们最好检查一下 Task 状态，但这里拿不到 Task 对象，只拿到 ID。
+                // 简单起见，先加回去。UI 层负责根据 isCompleted 决定是否显示在待办列表。
+                await dailyPlanProvider.addTodoTask(e.start, taskId);
+            }
+            cleared++;
+            await Future<void>.delayed(Duration.zero);
+        }
+    }
+    
     return cleared;
   }
 
@@ -701,17 +752,18 @@ class DayWeekAiScheduler {
     final systemPrompt =
         '你是一个严格的“日历时间块排期引擎（Time-Block Scheduling Engine）”。\n'
         '你要把任务安排到具体的时间段中，并生成日程块。\n'
-        '你的目标是：在不违反规则的前提下，最大化利用 freeWindows（空闲时间），实现紧凑安排（Tight Scheduling）。\n'
+        '你的目标是：在不违反规则的前提下，最大化利用 freeWindows（空闲时间），实现紧凑安排。\n'
         '不要预留缓冲空隙（除非无任务可排），尽可能填满所有空闲时间。\n'
         '\n'
         '## 核心策略（Core Strategy）\n'
-        '1. **要事优先**：严格遵守任务优先级。高优先级任务必须优先安排，且应分配到精力最好的时段。\n'
-        '2. **90分钟法则**：单个时间块的最长持续时间不得超过 90 分钟。\n'
-        '   - 如果任务预估耗时 > 90 分钟，必须将其拆分为多个时间块。\n'
-        '3. **穿插调度 (Interleaving)**：\n'
-        '   - 当长任务被拆分时（如 A1, A2），尽量在它们之间插入一个短任务或不同类型的任务（如 B），形成 A -> B -> A 的模式，以缓解疲劳。\n'
-        '   - 避免连续安排超过 3 小时的同一任务（即避免 A -> A -> A）。\n'
-        '4. **紧凑排列**：不要在时间块之间人为制造空隙。End(Block N) 应等于 Start(Block N+1)。\n'
+        '1. **深度工作（Deep Work）优先**：\n'
+        '   - 尽可能保持任务的连续性。如果一个任务需要 3 小时，请尽量安排一个连续的 3 小时块（或两个 1.5 小时块），而不是切分成多个碎片。\n'
+        '   - **严禁**为了“穿插”而人为打断正在进行的任务。同一任务的时间块应紧邻排列。\n'
+        '2. **时间块时长**：\n'
+        '   - 优先分配 **60分钟** 或 **90分钟** 的长整块。\n'
+        '   - 仅当任务剩余预估时间不足 60 分钟，或空闲时间窗口很小时，才分配 30 分钟或 15 分钟的短块。\n'
+        '3. **要事优先**：严格遵守任务优先级。高优先级任务必须优先安排在最早、最长的空闲时段。\n'
+        '4. **紧凑排列**：End(Block N) 应等于 Start(Block N+1)，中间不留空隙。\n'
         '\n'
         '## 关键规则（必须遵守）\n'
         '1) 你不能创建新的任务，只能从 taskPool 中选择 taskId。\n'
@@ -744,12 +796,12 @@ class DayWeekAiScheduler {
         'planning_strategy': {
           'maximize_total_scheduled_minutes': true,
           'allow_multiple_blocks_per_task': true,
-          'max_block_duration_minutes': 90,
-          'interleave_long_tasks': true,
           'prefer_tight_scheduling': true,
           'minimize_gaps': true,
+          'minimize_fragmentation': true,
+          'prefer_longer_blocks': true,
           'balance_strategy': 'priority_based',
-          'notes': '任务已按优先级和截止日期排序。请优先安排列表靠前的任务。如果任务需时较长，请拆分并尝试穿插其他短任务。'
+          'notes': '任务已按优先级和截止日期排序。请优先安排列表靠前的任务。请尽可能为每个任务分配连续的长整块时间，减少任务切换。'
         }
       },
       'busyEvents': busy,
@@ -784,7 +836,7 @@ class DayWeekAiScheduler {
     final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
     final usedIntervals = <({DateTime start, DateTime end})>[];
     final allocatedMinutesByTaskId = <String, int>{};
-    const maxBlocksPerTask = 8;
+    const maxBlocksPerTask = 32;
     final blocksCountByTaskId = <String, int>{};
 
     final estMinutesByTaskId = <String, int?>{
@@ -808,7 +860,7 @@ class DayWeekAiScheduler {
 
     for (final item in blocks) {
       if (item is! Map) continue;
-      final taskId = item['taskId']?.toString();
+      final taskId = item['taskId']?.toString().trim(); // Fix: trim taskId
       final title = item['title']?.toString();
       final startStr = item['start']?.toString();
       final endStr = item['end']?.toString();

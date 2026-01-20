@@ -2,8 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -17,7 +15,8 @@ import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
 import 'now_indicator_painter.dart';
 import '../../providers/task_list_provider.dart';
-import 'day_week_ai_scheduler.dart';
+import '../../providers/daily_plan_provider.dart';
+import '../../../data/models/daily_plan_hive.dart';
 
 class DayView extends StatefulWidget {
 	final DateTime date;
@@ -178,7 +177,6 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 			return !dd.isBefore(aa) && !dd.isAfter(bb);
 		}
 		final taskListProvider = context.watch<TaskListProvider>();
-		final allDayEvents = widget.events.where((e) => e.allDay && inRange(widget.date, e.start, e.end)).toList();
 		return Focus(
 			autofocus: true,
 			child: KeyboardListener(
@@ -201,70 +199,61 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 					),
 				),
 				const Divider(height: 1),
-				// 全天行（与组件 minHeight 绑定，自适应高度）
-				SingleAllDayRow(
-					days: [widget.date],
-					events: allDayEvents,
-					gutterWidth: CalendarConstants.gutterWidth,
-					minHeight: 140,
-					maxHeight: 220,
-					isExpanded: _isTodayTasksExpanded,
-					onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
-				),
-				const Divider(height: 1),
-				FutureBuilder<Set<String>>(
-					future: DayWeekAiScheduler.getAiScheduledTaskIdsForDate(widget.date),
+				// 全天行 & 待办行 (使用 DailyPlanProvider)
+				FutureBuilder<DailyPlanHive>(
+					future: context.read<DailyPlanProvider>().getPlanForDate(widget.date),
 					builder: (context, snapshot) {
-						final scheduledIds = snapshot.data ?? const <String>{};
-						return FutureBuilder<List<String>>(
-							future: () async {
-								final prefs = await SharedPreferences.getInstance();
-								final dayKey = '${widget.date.year}-${widget.date.month.toString().padLeft(2, '0')}-${widget.date.day.toString().padLeft(2, '0')}';
-								final titles = <String>[];
-								final seen = <String>{};
+						final plan = snapshot.data;
+						final planAllDayTaskIds = plan?.allDayTaskIds ?? [];
+						
+						// 1. 准备全天任务 (Legacy Events + Plan Tasks)
+						final legacyAllDay = widget.events.where((e) => e.allDay && inRange(widget.date, e.start, e.end) && !planAllDayTaskIds.contains(e.id)).toList();
+						final planAllDayEvents = planAllDayTaskIds.map((id) {
+							final t = taskListProvider.getTaskById(id);
+							if (t == null) return null;
+							return CalendarEvent(
+								id: t.id,
+								title: t.title,
+								description: t.description ?? '',
+								allDay: true,
+								start: widget.date,
+								end: widget.date,
+								color: Colors.blue, // 默认颜色，后续可从 Task 读取优先级颜色
+								isCompleted: t.isCompleted,
+							);
+						}).whereType<CalendarEvent>().toList();
+						
+						final combinedAllDay = [...legacyAllDay, ...planAllDayEvents];
 
-								for (final t in taskListProvider.tasks) {
-									if (t.isCompleted) continue;
-									if (scheduledIds.contains(t.id)) continue;
-									if (seen.contains(t.id)) continue;
+						// 2. 准备今日待办 (Plan Todos)
+						final planTodoIds = plan?.todoTaskIds ?? [];
+						final planTodoTitles = planTodoIds.map((id) {
+							 final t = taskListProvider.getTaskById(id);
+							 return t?.title;
+						}).whereType<String>().toList();
 
-									final due = t.dueDate;
-									if (due != null && due.year == widget.date.year && due.month == widget.date.month && due.day == widget.date.day) {
-										titles.add(t.title);
-										seen.add(t.id);
-										continue;
-									}
-
-									final raw = prefs.getString('task_meta_v1_${t.id}');
-									if (raw == null || raw.trim().isEmpty) continue;
-									try {
-										final decoded = jsonDecode(raw);
-										if (decoded is! Map) continue;
-										final v = decoded['aiDueDates'];
-										if (v is! List) continue;
-										final has = v.any((e) => e.toString().startsWith(dayKey));
-										if (!has) continue;
-										titles.add(t.title);
-										seen.add(t.id);
-									} catch (_) {
-										continue;
-									}
-								}
-
-								return titles;
-							}(),
-							builder: (context, todoSnap) {
-								final todayTodos = todoSnap.data ?? const <String>[];
-								return SingleTodoRow(
+						return Column(
+							children: [
+								SingleAllDayRow(
 									days: [widget.date],
-									todos: [todayTodos],
+									events: combinedAllDay,
+									gutterWidth: CalendarConstants.gutterWidth,
+									minHeight: 140,
+									maxHeight: 220,
+									isExpanded: _isTodayTasksExpanded,
+									onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
+								),
+								const Divider(height: 1),
+								SingleTodoRow(
+									days: [widget.date],
+									todos: [planTodoTitles],
 									gutterWidth: CalendarConstants.gutterWidth,
 									minHeight: 64,
 									maxHeight: 180,
 									isExpanded: _isTodayTodosExpanded,
 									onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
-								);
-							},
+								),
+							],
 						);
 					},
 				),
@@ -398,16 +387,18 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 	// 获取当前日期的所有非全天活动
 	List<CalendarEvent> _getDayEvents() {
 		final currentDate = DateTime(widget.date.year, widget.date.month, widget.date.day);
-		final events = <CalendarEvent>[];
+		
+		// 1. 获取通过 props 传入的事件（可能来自外部查询）
+		final events = widget.events.where((e) => !e.allDay).toList();
+		
+		final resultEvents = <CalendarEvent>[];
 		
 		// 获取正在操作的事件ID
 		final movingEventId = isMoving ? movingEvent?.id : null;
 		final resizingEventId = isResizing ? resizingEvent?.id : null;
 		
 		// 一次遍历处理所有逻辑
-		for (final event in widget.events) {
-			if (event.allDay) continue;
-			
+		for (final event in events) {
 			final eventDate = DateTime(event.start.year, event.start.month, event.start.day);
 			if (!eventDate.isAtSameMomentAs(currentDate)) continue;
 			
@@ -417,25 +408,25 @@ class _DayViewState extends State<DayView> with CalendarStateMixin, CalendarGest
 				continue;
 			}
 			
-			events.add(event);
+			resultEvents.add(event);
 		}
 		
 		// 添加正在操作的事件到新位置
 		if (isMoving && movingEvent != null) {
 			final movingDate = DateTime(movingEvent!.start.year, movingEvent!.start.month, movingEvent!.start.day);
 			if (movingDate.isAtSameMomentAs(currentDate)) {
-				events.add(movingEvent!);
+				resultEvents.add(movingEvent!);
 			}
 		}
 		
 		if (isResizing && resizingEvent != null) {
 			final resizingDate = DateTime(resizingEvent!.start.year, resizingEvent!.start.month, resizingEvent!.start.day);
 			if (resizingDate.isAtSameMomentAs(currentDate)) {
-				events.add(resizingEvent!);
+				resultEvents.add(resizingEvent!);
 			}
 		}
 		
-		return events;
+		return resultEvents;
 	}
 	
 	// 构建活动显示块

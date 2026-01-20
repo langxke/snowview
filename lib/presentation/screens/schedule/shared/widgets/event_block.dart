@@ -132,6 +132,10 @@ class CalendarEventBlock extends StatelessWidget {
   Widget _buildCompactLayout() {
     return Row(
       children: [
+        if (event.isCompleted) ...[
+          Icon(Icons.check_circle, size: 12, color: event.color),
+          const SizedBox(width: 4),
+        ],
         Flexible(
           child: Text(
             '${event.title} ${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.start))}-${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.end))}',
@@ -154,15 +158,25 @@ class CalendarEventBlock extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          event.title,
-          style: TextStyle(
-            fontSize: 12,
-            color: event.color.withOpacity(0.9),
-            fontWeight: FontWeight.w600,
-          ),
-          overflow: TextOverflow.ellipsis,
-          maxLines: 1,
+        Row(
+          children: [
+            if (event.isCompleted) ...[
+              Icon(Icons.check_circle, size: 14, color: event.color),
+              const SizedBox(width: 4),
+            ],
+            Expanded(
+              child: Text(
+                event.title,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: event.color.withOpacity(0.9),
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          ],
         ),
         if (height > 30) // 只有足够高度时才显示时间
           Text(

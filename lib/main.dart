@@ -18,15 +18,20 @@ import 'data/models/focus_daily_stats_hive.dart';
 import 'data/models/ai_config_hive.dart';
 import 'data/models/chat_message_hive.dart';
 import 'data/models/chat_session_hive.dart';
+import 'data/models/daily_plan_hive.dart'; // Import DailyPlanHive
 import 'data/repositories/task_list_repository.dart';
 import 'data/repositories/focus_session_repository.dart';
 import 'data/repositories/ai_config_repository.dart';
 import 'data/repositories/chat_history_repository.dart';
 import 'data/repositories/chat_session_repository.dart';
+import 'data/repositories/daily_plan_repository.dart'; // Import DailyPlanRepository
 import 'services/ai_service.dart';
 import 'services/ai_tool_executor.dart';
 import 'services/ai_context_builder.dart';
+import 'services/calendar_database_service.dart'; // Import CalendarDatabaseService
 import 'presentation/providers/ai_provider.dart';
+import 'presentation/providers/daily_plan_provider.dart'; // Import DailyPlanProvider
+import 'presentation/widgets/schedule_monitor.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,7 +57,7 @@ Future<void> main() async {
   // 初始化Hive
   await initHive();
   
-  runApp(const MyApp());
+  runApp(MyApp());
 }
 
 Future<void> initHive() async {
@@ -85,9 +90,11 @@ Future<void> initHive() async {
   Hive.registerAdapter(AIConfigHiveAdapter());
   Hive.registerAdapter(ChatMessageHiveAdapter());
   Hive.registerAdapter(ChatSessionHiveAdapter());
+  Hive.registerAdapter(DailyPlanHiveAdapter()); // Register DailyPlanHiveAdapter
   
   // 打开数据库
   await Hive.openBox<CalendarEventHive>('calendar_events');
+  await Hive.openBox<DailyPlanHive>('daily_plans'); // Open daily_plans box
   
   // 初始化清单任务数据库
   await TaskListRepository.init();
@@ -102,7 +109,10 @@ Future<void> initHive() async {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  MyApp({super.key});
+
+  // 全局 Navigator Key，用于获取 Overlay 上下文
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
@@ -117,6 +127,13 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(
           create: (_) => TaskListProvider(TaskListRepository()),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => DailyPlanProvider(
+            DailyPlanRepository(), 
+            TaskListRepository(), 
+            CalendarDatabaseService(),
+          ),
         ),
         // AI Provider - 需要依赖其他 providers
         ChangeNotifierProxyProvider3<TaskListProvider, ScheduleProvider,
@@ -178,11 +195,20 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, theme, _) => MaterialApp(
+          navigatorKey: navigatorKey,
           title: '雪象SnowView',
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
           themeMode: theme.mode,
           themeAnimationDuration: Duration.zero,
+          builder: (context, child) {
+            // 将 ScheduleMonitor 移到 builder 中
+            // 并传入 navigatorKey 以便其内部能获取正确的 Overlay 上下文
+            return ScheduleMonitor(
+              navigatorKey: navigatorKey,
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
           home: const MainScreen(),
         ),
       ),

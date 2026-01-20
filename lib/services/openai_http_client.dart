@@ -56,7 +56,7 @@ class OpenAIHttpClient {
     ));
 
     // ✅ 配置连接池参数
-    (_dio!.httpClientAdapter as DefaultHttpClientAdapter).onHttpClientCreate = (client) {
+    (_dio!.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (client) {
       // 每个主机的最大连接数
       client.maxConnectionsPerHost = 8;
       

@@ -114,7 +114,7 @@ class _ChatSessionTabBarState extends State<ChatSessionTabBar> {
         decoration: BoxDecoration(
           color: isActive
               ? colorScheme.primaryContainer
-              : colorScheme.surfaceVariant,
+              : colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: isActive ? colorScheme.primary : Colors.transparent,

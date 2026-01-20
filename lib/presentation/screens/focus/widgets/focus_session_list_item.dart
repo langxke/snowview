@@ -123,7 +123,7 @@ class FocusSessionListItem extends StatelessWidget {
         : session.plannedDuration;
     
     final minutes = duration ~/ 60;
-    return '${minutes}分钟';
+    return '$minutes分钟';
   }
 }
 

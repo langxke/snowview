@@ -136,9 +136,7 @@ class MarkdownToolbar extends StatelessWidget {
     } else {
       // 无选中文本：插入模板
       final cursorPos = selection.baseOffset;
-      final newText = text.substring(0, cursorPos) +
-                      '${prefix}文本$suffix' +
-                      text.substring(cursorPos);
+      final newText = '${text.substring(0, cursorPos)}$prefix文本$suffix${text.substring(cursorPos)}';
 
       controller.value = TextEditingValue(
         text: newText,

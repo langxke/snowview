@@ -24,13 +24,14 @@ class CalendarEventHiveAdapter extends TypeAdapter<CalendarEventHive> {
       start: fields[4] as DateTime,
       end: fields[5] as DateTime,
       colorValue: fields[6] as int,
+      isCompleted: fields[7] == null ? false : fields[7] as bool,
     );
   }
 
   @override
   void write(BinaryWriter writer, CalendarEventHive obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -44,7 +45,9 @@ class CalendarEventHiveAdapter extends TypeAdapter<CalendarEventHive> {
       ..writeByte(5)
       ..write(obj.end)
       ..writeByte(6)
-      ..write(obj.colorValue);
+      ..write(obj.colorValue)
+      ..writeByte(7)
+      ..write(obj.isCompleted);
   }
 
   @override

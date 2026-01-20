@@ -383,7 +383,7 @@ class _TaskItemState extends State<TaskItem> {
   Widget _buildAiSuggestionSummary(BuildContext context) {
     final theme = Theme.of(context);
     final dueStr = widget.task.dueDate != null ? TaskUtils.formatDueDate(widget.task.dueDate!) : '未设置';
-    final estStr = _estimatedMinutes != null ? '${_estimatedMinutes} 分钟' : '未设置';
+    final estStr = _estimatedMinutes != null ? '$_estimatedMinutes 分钟' : '未设置';
     final priStr = _formatPriority(_priority);
     final repeatStr = _formatRepeatRule(_repeatRule);
     final noteRaw = (widget.task.description ?? '').trim();
@@ -538,7 +538,7 @@ class _TaskItemState extends State<TaskItem> {
             ),
             Expanded(
               child: DropdownButtonFormField<int?>(
-                value: _estimatedMinutes,
+                initialValue: _estimatedMinutes,
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -568,7 +568,7 @@ class _TaskItemState extends State<TaskItem> {
             ),
             Expanded(
               child: DropdownButtonFormField<int?>(
-                value: _priority,
+                initialValue: _priority,
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -595,7 +595,7 @@ class _TaskItemState extends State<TaskItem> {
             ),
             Expanded(
               child: DropdownButtonFormField<String?>(
-                value: _repeatRule,
+                initialValue: _repeatRule,
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),

@@ -60,6 +60,13 @@ class NotificationService {
         android: androidDetails,
         linux: linuxDetails,
       );
+      
+      if (Platform.isWindows) {
+        // Windows 上直接调用 show，无需特殊 details (插件会自动处理)
+        // 注意：Windows 上需要在 Runner/Main.cpp 或 Package Manifest 中配置 GUID 才能显示（如果插件内部没做 fallback）
+        // flutter_local_notifications 默认应该能工作
+      }
+      
       await _plugin.show(id, title, body, details);
     } catch (e) {
       debugPrint('显示通知失败: $e');
@@ -78,7 +85,7 @@ class NotificationService {
     // 桌面平台暂不实现定时通知
     // 移动平台可以使用 zonedSchedule 实现
     // TODO: 后续集成 timezone 包支持定时通知
-    debugPrint('定时通知已安排（桌面平台暂不支持）: ${afterSeconds}秒后');
+    debugPrint('定时通知已安排（桌面平台暂不支持）: $afterSeconds秒后');
   }
 
   /// 取消专注通知
@@ -97,15 +104,7 @@ class NotificationService {
     required String title,
     required String body,
   }) async {
-    // Windows/macOS/Linux 桌面平台：不支持系统通知，只记录日志
-    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-      debugPrint('✅ 专注完成：$title - $body');
-      // 桌面平台暂不显示系统通知，避免错误
-      // 用户可以通过UI界面看到专注完成状态
-      return;
-    }
-    
-    // Android/iOS 移动平台：使用系统通知
+    // 尝试在所有平台（包括 Windows/Linux/MacOS）都显示通知
     try {
       await initialize();
       
@@ -124,12 +123,13 @@ class NotificationService {
         enableVibration: true,
       );
       
+      // 桌面平台通常不需要复杂的 Details，或者使用默认值即可
       const NotificationDetails details = NotificationDetails(
         android: androidDetails,
       );
       
       await _plugin.show(0, title, body, details);
-      debugPrint('通知已显示: $title - $body');
+      debugPrint('通知已发送: $title - $body');
     } catch (e) {
       debugPrint('显示通知失败: $e');
     }

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'models.dart';
 
 class EventPill extends StatelessWidget {
@@ -63,7 +62,7 @@ class EventList extends StatelessWidget {
 					children: [
 						for (final e in list) EventPill(title: e.title, color: e.color),
 						if (overflow > 0)
-							Text('其他${overflow}个', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+							Text('其他$overflow个', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
 					],
 				);
 			},
@@ -337,17 +336,30 @@ class _AddEventDialogState extends State<AddEventDialog> {
 														);
 													}).toList(),
 													onChanged: (value) {
-														setState(() {
-															startTime = value;
-															// 如果结束时间早于或等于新的开始时间，则清空结束时间
-															if (endTime != null && value != null) {
-																final startMinutes = value.hour * 60 + value.minute;
-																final endMinutes = endTime!.hour * 60 + endTime!.minute;
-																if (endMinutes <= startMinutes) {
-																	endTime = null;
+														if (value != null) {
+															setState(() {
+																startTime = value;
+																// 如果结束时间早于或等于新的开始时间，则调整结束时间
+																if (endTime != null) {
+																	final startMinutes = value.hour * 60 + value.minute;
+																	final endMinutes = endTime!.hour * 60 + endTime!.minute;
+																	if (endMinutes <= startMinutes) {
+																		// 设置结束时间为开始时间后一小时
+																		final newEndMinutes = startMinutes + 60;
+																		final newHour = (newEndMinutes ~/ 60) % 24;
+																		final newMinute = newEndMinutes % 60;
+																		endTime = TimeOfDay(hour: newHour, minute: newMinute);
+																	}
+																} else {
+																	// 初始化结束时间为开始时间后一小时
+																	final startMinutes = value.hour * 60 + value.minute;
+																	final newEndMinutes = startMinutes + 60;
+																	final newHour = (newEndMinutes ~/ 60) % 24;
+																	final newMinute = newEndMinutes % 60;
+																	endTime = TimeOfDay(hour: newHour, minute: newMinute);
 																}
-															}
-														});
+															});
+														}
 													},
 												),
 											],
@@ -366,17 +378,18 @@ class _AddEventDialogState extends State<AddEventDialog> {
 														border: OutlineInputBorder(),
 														contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
 													),
-													hint: const Text('选择结束时间'),
 													items: _getEndTimeOptions().map((time) {
 														return DropdownMenuItem(
 															value: time,
 															child: Text(_formatTime(time)),
 														);
 													}).toList(),
-													onChanged: startTime == null ? null : (value) {
-														setState(() {
-															endTime = value;
-														});
+													onChanged: (value) {
+														if (value != null) {
+															setState(() {
+																endTime = value;
+															});
+														}
 													},
 												),
 											],
@@ -534,7 +547,7 @@ class _DayViewAddEventDialogState extends State<DayViewAddEventDialog> {
 												const Text('开始时间', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
 												const SizedBox(height: 4),
 												DropdownButtonFormField<TimeOfDay>(
-													value: startTime,
+													initialValue: startTime,
 													decoration: const InputDecoration(
 														border: OutlineInputBorder(),
 														contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -574,7 +587,7 @@ class _DayViewAddEventDialogState extends State<DayViewAddEventDialog> {
 												const Text('结束时间', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
 												const SizedBox(height: 4),
 												DropdownButtonFormField<TimeOfDay>(
-													value: endTime,
+													initialValue: endTime,
 													decoration: const InputDecoration(
 														border: OutlineInputBorder(),
 														contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),

@@ -7,18 +7,20 @@ class CalendarEvent {
 	final bool allDay;
 	final String description;
 	final Color color;
-	final DateTime start;
-	final DateTime end;
+  final DateTime start;
+  final DateTime end;
+  final bool isCompleted;
 
-	CalendarEvent({
-		String? id,
-		required this.title,
-		required this.allDay,
-		required this.description,
-		required this.color,
-		required this.start,
-		required this.end,
-	}) : id = id ?? const Uuid().v4();
+  CalendarEvent({
+    String? id,
+    required this.title,
+    required this.allDay,
+    required this.description,
+    required this.color,
+    required this.start,
+    required this.end,
+    this.isCompleted = false,
+  }) : id = id ?? const Uuid().v4();
 
 	bool intersects(DateTime day) {
 		final d = DateTime(day.year, day.month, day.day);
@@ -35,6 +37,7 @@ class CalendarEvent {
 		Color? color,
 		DateTime? start,
 		DateTime? end,
+		bool? isCompleted,
 	}) {
 		return CalendarEvent(
 			id: id, // 保持相同的ID
@@ -44,6 +47,7 @@ class CalendarEvent {
 			color: color ?? this.color,
 			start: start ?? this.start,
 			end: end ?? this.end,
+			isCompleted: isCompleted ?? this.isCompleted,
 		);
 	}
 	

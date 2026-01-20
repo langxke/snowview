@@ -27,6 +27,9 @@ class CalendarEventHive extends HiveObject {
   @HiveField(6)
   int colorValue;        // 颜色值 (Color.value)
   
+  @HiveField(7)
+  bool isCompleted;      // 是否已完成（用户已确认）
+
   CalendarEventHive({
     required this.id,
     required this.title,
@@ -35,6 +38,7 @@ class CalendarEventHive extends HiveObject {
     required this.start,
     required this.end,
     required this.colorValue,
+    this.isCompleted = false,
   });
   
   // 获取Color对象
@@ -60,6 +64,7 @@ class CalendarEventHive extends HiveObject {
     DateTime? start,
     DateTime? end,
     Color? color,
+    bool? isCompleted,
   }) {
     return CalendarEventHive(
       id: id ?? this.id,
@@ -68,7 +73,8 @@ class CalendarEventHive extends HiveObject {
       allDay: allDay ?? this.allDay,
       start: start ?? this.start,
       end: end ?? this.end,
-      colorValue: color?.value ?? this.colorValue,
+      colorValue: color?.value ?? colorValue,
+      isCompleted: isCompleted ?? this.isCompleted,
     );
   }
   
@@ -82,6 +88,7 @@ class CalendarEventHive extends HiveObject {
       color: color,
       start: start,
       end: end,
+      isCompleted: isCompleted,
     );
   }
   
@@ -95,6 +102,7 @@ class CalendarEventHive extends HiveObject {
       start: event.start,
       end: event.end,
       colorValue: event.color.value,
+      isCompleted: event.isCompleted,
     );
   }
   

@@ -718,7 +718,7 @@ class AIToolExecutor {
       if (freeSlots.isEmpty) {
         return {
           'success': true,
-          'message': '当天没有足够的空闲时间（需要${duration}分钟）',
+          'message': '当天没有足够的空闲时间（需要$duration分钟）',
           'freeSlots': [],
         };
       }
@@ -778,7 +778,7 @@ class AIToolExecutor {
 
       return {
         'success': true,
-        'message': '已启动${duration}分钟的$sessionType会话',
+        'message': '已启动$duration分钟的$sessionType会话',
         'taskId': taskId,
         'duration': duration,
         'sessionType': sessionType,

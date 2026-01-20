@@ -2,8 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import '../../data/models/calendar_event_hive.dart';
 import '../screens/schedule/models.dart';
+import '../../services/calendar_database_service.dart';
 
 class ScheduleProvider extends ChangeNotifier {
+  final CalendarDatabaseService databaseService = CalendarDatabaseService();
+
   /// 获取指定日期的所有时间块（事件 + 任务会话）
   /// 返回转换为 CalendarEvent 的列表，包含类型标识
   List<CalendarEvent> getEventsForDate(DateTime date) {

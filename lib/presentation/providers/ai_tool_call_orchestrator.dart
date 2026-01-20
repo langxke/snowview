@@ -347,7 +347,7 @@ class AIToolCallOrchestrator {
         }
         
         // 所有重试都失败，返回错误
-        throw e;
+        rethrow;
       }
     }
     

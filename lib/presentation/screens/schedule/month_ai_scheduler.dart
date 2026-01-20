@@ -8,7 +8,8 @@ import '../../../data/models/openai/openai_models.dart';
 import '../../../data/repositories/ai_config_repository.dart';
 import '../../../services/ai_service.dart';
 import '../../providers/schedule_provider.dart';
-import '../../providers/task_list_provider.dart';
+import '../../providers/daily_plan_provider.dart';
+import '../../providers/task_list_provider.dart'; // Add TaskListProvider import
 
 class MonthAiScheduler {
   static const String _taskMetaPrefsPrefix = 'task_meta_v1_';
@@ -68,10 +69,22 @@ class MonthAiScheduler {
     if (rangeStart.isAfter(monthEnd)) return;
 
     final taskProvider = context.read<TaskListProvider>();
+    final dailyPlanProvider = context.read<DailyPlanProvider>();
+    
     final candidates = taskProvider.tasks
         .where((t) => !t.isCompleted)
         .where((t) => t.dueDate == null)
-        .toList(growable: false);
+        .toList(); // Removed growable: false, but toList() is enough. 
+                   // The issue was in .map((t) => {...}) later where type inference might fail if not explicit
+                   // Or simply TaskListProvider import was not clean.
+                   // Actually the error was "The name 'TaskListProvider' isn't a type"
+                   // This usually means TaskListProvider is not imported or imported with alias/prefix
+                   // But line 11 imports it correctly.
+                   // Wait, line 11 imports daily_plan_provider.dart
+                   // line 10 imports schedule_provider.dart
+                   // TaskListProvider is usually in task_list_provider.dart
+                   // Let's check imports.
+                   // Missing import for TaskListProvider!
 
     if (candidates.isEmpty) {
       if (!context.mounted) return;
@@ -111,25 +124,40 @@ class MonthAiScheduler {
       }
 
       int applied = 0;
+      
+      // 新逻辑：将 AI 安排结果写入 DailyPlan
       for (final entry in byTaskId.entries) {
         final taskId = entry.key;
-        final dates = entry.value..sort();
+        final dates = entry.value; // dates 已经包含了循环任务的所有展开日期
+        
+        for (final date in dates) {
+            await dailyPlanProvider.addTodoTask(date, taskId);
+        }
+        
+        // 可选：记录 AI 元数据以便清空（虽然现在清空逻辑也可以改为扫描 DailyPlan）
+        // 为了兼容性，我们仍然写入元数据，但不再修改 Task.dueDate
         final repeat = _readTaskRepeat(prefs: prefs, taskId: taskId);
         final isRecurring = repeat != null && repeat.trim().isNotEmpty && repeat.trim() != 'none';
-
+        
         if (isRecurring) {
-          await _writeTaskMetaAiDueDates(prefs: prefs, taskId: taskId, dates: dates);
-          applied += dates.length;
+            await _writeTaskMetaAiDueDates(prefs: prefs, taskId: taskId, dates: dates);
         } else {
-          final picked = dates.first;
-          await taskProvider.updateTask(id: taskId, dueDate: picked);
-          await _writeTaskMetaAiDueDate(prefs: prefs, taskId: taskId, date: picked);
-          applied++;
+            // 对于非循环任务，如果是 AI 安排的，我们只记录元数据，不修改 Task 的物理 dueDate
+            // 这样任务在列表中还是“无日期”，但在日历上通过 DailyPlan 显示
+            if (dates.isNotEmpty) {
+                 await _writeTaskMetaAiDueDate(prefs: prefs, taskId: taskId, date: dates.first);
+            }
         }
+        
+        applied += dates.length;
       }
 
       if (!context.mounted) return;
+      // 刷新 ScheduleScreen 可能会重新获取 DailyPlan
       context.read<ScheduleProvider>().refresh();
+      // 通知 UI 刷新（如果 ScheduleScreen 监听了 DailyPlanProvider 则自动刷新，否则可能需要手动触发）
+      // 由于 DailyPlanProvider 是 ChangeNotifier，addTodoTask 会 notifyListeners
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI 已安排 $applied 条任务到本月日历')),
       );
@@ -194,29 +222,39 @@ class MonthAiScheduler {
     required DateTime monthEnd,
   }) async {
     final taskProvider = context.read<TaskListProvider>();
+    final dailyPlanProvider = context.read<DailyPlanProvider>();
     final prefs = await SharedPreferences.getInstance();
     final start = DateTime(today.year, today.month, today.day);
     final end = DateTime(monthEnd.year, monthEnd.month, monthEnd.day);
     int cleared = 0;
 
     for (final t in taskProvider.tasks) {
-      if (t.isCompleted) continue;
-      final due = t.dueDate;
-      final aiDueDates = _readTaskMetaAiDueDates(prefs: prefs, taskId: t.id);
-      if (aiDueDates != null && aiDueDates.isNotEmpty) {
-        await _clearTaskMetaAiDueDates(prefs: prefs, taskId: t.id);
-        cleared += aiDueDates.length;
+      // 1. 检查 AI 安排的单日任务
+      final aiDue = _readTaskMetaAiDueDate(prefs: prefs, taskId: t.id);
+      if (aiDue != null) {
+          final date = DateTime.tryParse(aiDue);
+          if (date != null && !date.isBefore(start) && !date.isAfter(end)) {
+              await dailyPlanProvider.removeTodoTask(date, t.id);
+              await _clearTaskMetaAiDueDate(prefs: prefs, taskId: t.id);
+              cleared++;
+          }
       }
 
-      if (due == null) continue;
-      final dueDay = DateTime(due.year, due.month, due.day);
-      if (dueDay.isBefore(start) || dueDay.isAfter(end)) continue;
-      final aiDue = _readTaskMetaAiDueDate(prefs: prefs, taskId: t.id);
-      if (aiDue == null) continue;
-      if (aiDue != _dateKey(dueDay)) continue;
-      await taskProvider.updateTask(id: t.id, clearDueDate: true);
-      await _clearTaskMetaAiDueDate(prefs: prefs, taskId: t.id);
-      cleared++;
+      // 2. 检查 AI 安排的循环任务日期
+      final aiDueDates = _readTaskMetaAiDueDates(prefs: prefs, taskId: t.id);
+      if (aiDueDates != null && aiDueDates.isNotEmpty) {
+         for (final dStr in aiDueDates) {
+             final date = DateTime.tryParse(dStr);
+             if (date != null && !date.isBefore(start) && !date.isAfter(end)) {
+                 await dailyPlanProvider.removeTodoTask(date, t.id);
+                 // 注意：这里我们只移除了 DailyPlan 中的引用
+                 // 元数据中的 aiDueDates 列表可能需要更新（移除已清除的日期）
+                 // 为简单起见，如果是全量清除，我们会在循环结束后清除整个元数据 key
+             }
+         }
+         await _clearTaskMetaAiDueDates(prefs: prefs, taskId: t.id);
+         cleared += aiDueDates.length;
+      }
     }
 
     return cleared;

@@ -4,6 +4,7 @@ import '../providers/theme_provider.dart';
 import '../providers/focus_provider.dart';
 import '../providers/navigation_provider.dart';
 import '../widgets/custom_title_bar.dart';
+import '../widgets/schedule_monitor.dart'; // Import ScheduleMonitor
 import 'schedule_screen.dart';
 import 'settings_screen.dart';
 import 'tasks/task_list_screen.dart';
@@ -139,6 +140,22 @@ class _MainScreenState extends State<MainScreen> {
                               onPressed: () {
                                 final newMode = isDark ? ThemeMode.light : ThemeMode.dark;
                                 context.read<ThemeProvider>().setMode(newMode);
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            IconButton(
+                              tooltip: '手动触发任务清理',
+                              icon: const Icon(Icons.cleaning_services_outlined),
+                              onPressed: () {
+                                // 查找 ScheduleMonitorContentState 并触发测试
+                                final state = context.findAncestorStateOfType<ScheduleMonitorContentState>();
+                                if (state != null) {
+                                  state.debugTriggerCleanup();
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('未找到 ScheduleMonitorContentState')),
+                                  );
+                                }
                               },
                             ),
                           ],

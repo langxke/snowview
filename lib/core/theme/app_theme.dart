@@ -5,7 +5,6 @@ class AppTheme {
   static ThemeData light() {
     final ColorScheme cs = AppColorScheme.light.copyWith(
       surface: Colors.white,
-      background: Colors.white,
     );
     return ThemeData(
       useMaterial3: true,

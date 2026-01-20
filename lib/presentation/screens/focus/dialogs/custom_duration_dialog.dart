@@ -91,7 +91,7 @@ class _CustomDurationDialogState extends State<CustomDurationDialog> {
     final isSelected = _selectedMinutes.toInt() == minutes;
     
     return ChoiceChip(
-      label: Text('${minutes}分'),
+      label: Text('$minutes分'),
       selected: isSelected,
       onSelected: (selected) {
         if (selected) {

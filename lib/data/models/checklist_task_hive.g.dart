@@ -26,7 +26,7 @@ class ChecklistTaskHiveAdapter extends TypeAdapter<ChecklistTaskHive> {
       createdAt: fields[6] as DateTime,
       completedAt: fields[7] as DateTime?,
       order: fields[8] as int,
-      isLongTerm: fields[9] as bool? ?? false,
+      isLongTerm: fields[9] as bool,
     );
   }
 

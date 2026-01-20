@@ -1,9 +1,7 @@
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'schedule/models.dart';
 import 'schedule/widgets.dart';
@@ -16,7 +14,11 @@ import '../../services/calendar_database_service.dart';
 import '../providers/schedule_provider.dart';
 import '../providers/task_list_provider.dart';
 import '../providers/navigation_provider.dart';
+import '../providers/daily_plan_provider.dart'; // Import DailyPlanProvider
 import 'tasks/widgets/task_list_panel.dart';
+
+import '../../data/models/calendar_event_hive.dart'; // Add import
+import '../../data/models/daily_plan_hive.dart';
 
 class ScheduleScreen extends StatefulWidget {
   const ScheduleScreen({super.key});
@@ -35,9 +37,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   double? _dragWidth;
   double _resizeStartWidth = 0;
   double _resizeStartGlobalX = 0;
-
-  // 数据库服务
-  final CalendarDatabaseService _dbService = CalendarDatabaseService();
 
   static const int _yearRange = 10; // 当前年 ±10 年
 
@@ -67,94 +66,125 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   // 获取包含任务会话的事件列表
   List<CalendarEvent> _getAllEvents(BuildContext context) {
-    final scheduleProvider = context.watch<ScheduleProvider>();
-
-    // 根据当前视图获取对应的事件
-    switch (_view) {
-      case CalendarView.day:
-        return scheduleProvider.getEventsForDate(_selected);
-      case CalendarView.week:
-        final selectedDay = DateTime(_selected.year, _selected.month, _selected.day);
-        final weekStart = selectedDay.subtract(Duration(days: selectedDay.weekday - 1));
-        final weekEnd = weekStart.add(const Duration(days: 7));
-        return scheduleProvider.getEventsInRange(weekStart, weekEnd);
-      case CalendarView.month:
-        final range = _monthGridRange(year: _year, month: _month);
-        return scheduleProvider.getEventsInRange(range.start, range.end);
-    }
+    // 迁移：使用 DailyPlanProvider 替代 ScheduleProvider 获取事件
+    // 注意：这里的 _getAllEvents 必须返回同步数据，但 DailyPlan 可能是异步的
+    // 为了兼容现有架构，我们暂时返回空列表，让各子视图 (DayView/MonthView) 自己处理数据获取
+    // 或者，我们可以通过 FutureBuilder 在 build 方法中预加载
+    // 
+    // 目前 DayView/WeekView/MonthView 已经部分重构为从 props 接收 events
+    // 为了彻底切换，我们需要在 build 方法中统一获取 DailyPlan 数据
+    return []; 
   }
 
   @override
   Widget build(BuildContext context) {
     final navigationProvider = context.watch<NavigationProvider>();
-    final leftPanelWidth = _dragWidth ?? navigationProvider.calendarChecklistWidth;
-    final showChecklist = navigationProvider.isCalendarChecklistExpanded;
-    return Row(
-      children: [
-        AnimatedContainer(
-          duration: _isResizingChecklist
-              ? Duration.zero
-              : const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          width: showChecklist ? leftPanelWidth : 0,
-          child: ClipRect(
-            child: OverflowBox(
-              alignment: Alignment.centerLeft,
-              minWidth: 0,
-              maxWidth: leftPanelWidth,
-              child: SizedBox(
-                width: leftPanelWidth,
-                child: TaskListPanel(),
-              ),
-            ),
-          ),
-        ),
-        if (showChecklist)
-          _MouseResizeHandle(
-            onDragStart: (d) {
-              _resizeStartWidth = navigationProvider.calendarChecklistWidth;
-              _resizeStartGlobalX = d.globalPosition.dx;
-              setState(() {
-                _isResizingChecklist = true;
-                _dragWidth = _resizeStartWidth;
-              });
-            },
-            onDragUpdate: (d) {
-              final dx = d.globalPosition.dx - _resizeStartGlobalX;
-              final raw = _resizeStartWidth + dx;
-              final maxByWindow = MediaQuery.of(context).size.width * 0.6;
-              final maxWidth = maxByWindow < NavigationProvider.calendarChecklistMaxWidth
-                  ? maxByWindow
-                  : NavigationProvider.calendarChecklistMaxWidth;
-              final clamped = raw.clamp(
-                NavigationProvider.calendarChecklistMinWidth,
-                maxWidth,
-              );
-              setState(() {
-                _dragWidth = clamped.toDouble();
-              });
-            },
-            onDragEnd: (_) {
-              final finalWidth = _dragWidth;
-              if (finalWidth != null) {
-                navigationProvider.setCalendarChecklistWidth(finalWidth);
-              }
-              setState(() {
-                _dragWidth = null;
-                _isResizingChecklist = false;
-              });
-            },
-          ),
-        Expanded(
-          child: Column(
-            children: [
-              _buildHeader(context),
-              const Divider(height: 1),
-              Expanded(child: _buildMainCalendarArea(context)),
-            ],
-          ),
-        ),
-      ],
+    final dailyPlanProvider = context.watch<DailyPlanProvider>(); // Watch DailyPlanProvider
+    
+    // 预加载当前视图所需的 DailyPlan 数据
+    // 根据视图类型决定范围
+    DateTime start, end;
+    switch (_view) {
+      case CalendarView.day:
+        start = _dateOnly(_selected);
+        end = start.add(const Duration(days: 1));
+        break;
+      case CalendarView.week:
+        final selectedDay = _dateOnly(_selected);
+        start = selectedDay.subtract(Duration(days: selectedDay.weekday - 1));
+        end = start.add(const Duration(days: 7));
+        break;
+      case CalendarView.month:
+        final range = _monthGridRange(year: _year, month: _month);
+        start = range.start;
+        end = range.end;
+        break;
+    }
+
+    return FutureBuilder<Map<DateTime, DailyPlanHive>>(
+        future: dailyPlanProvider.getPlansForRange(start, end),
+        builder: (context, snapshot) {
+            final plans = snapshot.data ?? {};
+            
+            // 将 DailyPlan 中的 embedded events 转换为 CalendarEvent 列表供 UI 使用
+            final allEvents = <CalendarEvent>[];
+            for (final plan in plans.values) {
+                for (final e in plan.scheduledEvents) {
+                    allEvents.add(e.toCalendarEvent());
+                }
+            }
+            
+            final leftPanelWidth = _dragWidth ?? navigationProvider.calendarChecklistWidth;
+            final showChecklist = navigationProvider.isCalendarChecklistExpanded;
+            
+            return Row(
+              children: [
+                AnimatedContainer(
+                  duration: _isResizingChecklist
+                      ? Duration.zero
+                      : const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: showChecklist ? leftPanelWidth : 0,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: 0,
+                      maxWidth: leftPanelWidth,
+                      child: SizedBox(
+                        width: leftPanelWidth,
+                        child: TaskListPanel(),
+                      ),
+                    ),
+                  ),
+                ),
+                if (showChecklist)
+                  _MouseResizeHandle(
+                    onDragStart: (d) {
+                      _resizeStartWidth = navigationProvider.calendarChecklistWidth;
+                      _resizeStartGlobalX = d.globalPosition.dx;
+                      setState(() {
+                        _isResizingChecklist = true;
+                        _dragWidth = _resizeStartWidth;
+                      });
+                    },
+                    onDragUpdate: (d) {
+                      final dx = d.globalPosition.dx - _resizeStartGlobalX;
+                      final raw = _resizeStartWidth + dx;
+                      final maxByWindow = MediaQuery.of(context).size.width * 0.6;
+                      final maxWidth = maxByWindow < NavigationProvider.calendarChecklistMaxWidth
+                          ? maxByWindow
+                          : NavigationProvider.calendarChecklistMaxWidth;
+                      final clamped = raw.clamp(
+                        NavigationProvider.calendarChecklistMinWidth,
+                        maxWidth,
+                      );
+                      setState(() {
+                        _dragWidth = clamped.toDouble();
+                      });
+                    },
+                    onDragEnd: (_) {
+                      final finalWidth = _dragWidth;
+                      if (finalWidth != null) {
+                        navigationProvider.setCalendarChecklistWidth(finalWidth);
+                      }
+                      setState(() {
+                        _dragWidth = null;
+                        _isResizingChecklist = false;
+                      });
+                    },
+                  ),
+                Expanded(
+                  child: Column(
+                    children: [
+                      _buildHeader(context),
+                      const Divider(height: 1),
+                      Expanded(child: _buildMainCalendarArea(context, allEvents, plans)), // Pass data
+                    ],
+                  ),
+                ),
+              ],
+            );
+        }
     );
   }
 
@@ -286,9 +316,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   }
 
   // 主区域：根据模式切换
-  Widget _buildMainCalendarArea(BuildContext context) {
-    final allEvents = _getAllEvents(context);
-
+  Widget _buildMainCalendarArea(BuildContext context, List<CalendarEvent> allEvents, Map<DateTime, DailyPlanHive> plans) {
     switch (_view) {
       case CalendarView.day:
         return DayView(
@@ -302,81 +330,43 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         );
       case CalendarView.month:
         final taskListProvider = context.watch<TaskListProvider>();
-        final gridRange = _monthGridRange(year: _year, month: _month);
-        return FutureBuilder<Map<String, List<String>>>(
-          future: () async {
-            final prefs = await SharedPreferences.getInstance();
-            final Map<String, List<String>> todosByDate = {};
+        // 使用传入的 plans，不再重复调用 provider
+        
+        // 构造 todosByDate
+        final Map<String, List<String>> todosByDate = {};
+        plans.forEach((date, plan) {
+          final key = _dateKey(date);
+          final titles = <String>[];
+          
+          // 1. 全天任务
+          for (final id in plan.allDayTaskIds) {
+             final t = taskListProvider.getTaskById(id);
+             if (t != null && !t.isCompleted) {
+               titles.add(t.title);
+             }
+          }
+          
+          // 2. 待办任务
+          for (final id in plan.todoTaskIds) {
+             final t = taskListProvider.getTaskById(id);
+             if (t != null && !t.isCompleted) {
+               titles.add(t.title);
+             }
+          }
+          
+          if (titles.isNotEmpty) {
+            todosByDate[key] = titles;
+          }
+        });
 
-            final Map<String, Set<String>> scheduledTaskIdsByDate = <String, Set<String>>{};
-            final gridStart = gridRange.start;
-            final gridEndExclusive = gridRange.end;
-            for (final e in allEvents) {
-              if (e.allDay) continue;
-              final taskId = _tryExtractTaskIdFromDescription(e.description);
-              if (taskId == null || taskId.trim().isEmpty) continue;
-              var day = _dateOnly(e.start);
-              var last = _dateOnly(e.end);
-              if (last.isBefore(day)) continue;
-              if (day.isBefore(gridStart)) day = gridStart;
-              final gridLast = _dateOnly(gridEndExclusive.subtract(const Duration(days: 1)));
-              if (last.isAfter(gridLast)) last = gridLast;
-              for (DateTime d = day; !d.isAfter(last); d = d.add(const Duration(days: 1))) {
-                final key = _dateKey(d);
-                (scheduledTaskIdsByDate[key] ??= <String>{}).add(taskId);
-              }
-            }
-
-            for (final t in taskListProvider.tasks) {
-              if (t.isCompleted) continue;
-
-              // 1) 普通任务：使用 dueDate（单日期）
-              final due = t.dueDate;
-              if (due != null) {
-                final dueDay = _dateOnly(due);
-                if (!dueDay.isBefore(gridRange.start) && dueDay.isBefore(gridRange.end)) {
-                  final key = _dateKey(dueDay);
-                  if (scheduledTaskIdsByDate[key]?.contains(t.id) != true) {
-                    (todosByDate[key] ??= <String>[]).add(t.title);
-                  }
-                }
-              }
-
-              // 2) 循环任务：AI 可能写入多个日期到 task_meta aiDueDates
-              final raw = prefs.getString('task_meta_v1_${t.id}');
-              if (raw == null || raw.trim().isEmpty) continue;
-              try {
-                final decoded = jsonDecode(raw);
-                if (decoded is! Map) continue;
-                final v = decoded['aiDueDates'];
-                if (v is! List) continue;
-                for (final item in v) {
-                  final parsed = DateTime.tryParse(item.toString());
-                  if (parsed == null) continue;
-                  final day = _dateOnly(parsed);
-                  if (day.isBefore(gridRange.start) || !day.isBefore(gridRange.end)) continue;
-                  final key = _dateKey(day);
-                  if (scheduledTaskIdsByDate[key]?.contains(t.id) == true) continue;
-                  (todosByDate[key] ??= <String>[]).add(t.title);
-                }
-              } catch (_) {
-                continue;
-              }
-            }
-
-            return todosByDate;
-          }(),
-          builder: (context, snapshot) {
-            final todosByDate = snapshot.data ?? const <String, List<String>>{};
-            return MonthView(
-              year: _year,
-              month: _month,
-              events: allEvents,
-              todosByDate: todosByDate,
-              onAddEvent: _openAddEventDialog,
-            );
-          },
+        return MonthView(
+            year: _year,
+            month: _month,
+            events: allEvents,
+            todosByDate: todosByDate,
+            onAddEvent: _openAddEventDialog,
         );
+
       case CalendarView.week:
         return WeekView(
           centerDate: _selected,
@@ -415,39 +405,60 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   // 添加活动
   Future<void> _addEvent(CalendarEvent event) async {
-    await _dbService.addEventFromCalendarEvent(event);
-    if (mounted) {
-      context.read<ScheduleProvider>().refresh();
-    }
+    // 迁移：使用 DailyPlanProvider 替代 CalendarDatabaseService
+    final dailyPlanProvider = context.read<DailyPlanProvider>();
+    
+    // 需要将 CalendarEvent (UI Model) 转换为 CalendarEventHive (Data Model)
+    final hiveEvent = CalendarEventHive(
+      id: event.id.isEmpty ? DateTime.now().millisecondsSinceEpoch.toString() : event.id,
+      title: event.title,
+      description: event.description,
+      allDay: event.allDay,
+      start: event.start,
+      end: event.end,
+      colorValue: event.color.value,
+      isCompleted: false,
+    );
+    
+    await dailyPlanProvider.addScheduledEvent(event.start, hiveEvent);
+    // refresh() is handled by notifyListeners in Provider
   }
 
   // 更新活动
   Future<void> _updateEvent(CalendarEvent oldEvent, CalendarEvent newEvent) async {
-    final eventId = _dbService.findEventId(oldEvent);
-    if (eventId != null) {
-      await _dbService.updateEventById(eventId, newEvent);
-      setState(() {
-        if (_selectedEvent?.id == oldEvent.id) {
-          _selectedEvent = newEvent;
-        }
-      });
-
-      if (mounted) {
-        context.read<ScheduleProvider>().refresh();
+    // 迁移：使用 DailyPlanProvider 替代 CalendarDatabaseService
+    final dailyPlanProvider = context.read<DailyPlanProvider>();
+    
+    final hiveEvent = CalendarEventHive(
+      id: newEvent.id,
+      title: newEvent.title,
+      description: newEvent.description,
+      allDay: newEvent.allDay,
+      start: newEvent.start,
+      end: newEvent.end,
+      colorValue: newEvent.color.value,
+      isCompleted: false, // 保留状态需优化，暂默认false
+    );
+    
+    // DailyPlanProvider.updateScheduledEvent 会处理跨天迁移
+    await dailyPlanProvider.updateScheduledEvent(oldEvent.start, hiveEvent);
+    
+    setState(() {
+      if (_selectedEvent?.id == oldEvent.id) {
+        _selectedEvent = newEvent;
       }
-    }
+    });
   }
 
   // 删除活动
   Future<void> _deleteEvent(CalendarEvent event) async {
     try {
-      await _dbService.deleteEventByCalendarEvent(event);
+      // 迁移：使用 DailyPlanProvider 替代 CalendarDatabaseService
+      final dailyPlanProvider = context.read<DailyPlanProvider>();
+      await dailyPlanProvider.removeScheduledEvent(event.start, event.id);
+
       if (_selectedEvent == event) {
         _selectedEvent = null;
-      }
-
-      if (mounted) {
-        context.read<ScheduleProvider>().refresh();
       }
     } catch (e) {
       if (mounted) {

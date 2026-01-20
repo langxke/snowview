@@ -198,7 +198,7 @@ class _AIChatPanelState extends State<_AIChatPanel> {
                   margin: const EdgeInsets.symmetric(vertical: 6),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: m.isUser ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceVariant,
+                    color: m.isUser ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(m.text),

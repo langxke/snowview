@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 import 'all_day_row.dart';
 import 'widgets.dart';
@@ -17,7 +15,8 @@ import 'shared/mixins/calendar_state_mixin.dart';
 import 'shared/mixins/calendar_gesture_mixin.dart';
 import 'now_indicator_painter.dart';
 import '../../providers/task_list_provider.dart';
-import 'day_week_ai_scheduler.dart';
+import '../../providers/daily_plan_provider.dart';
+import '../../../data/models/daily_plan_hive.dart';
 
 class WeekView extends StatefulWidget {
 	final DateTime centerDate;
@@ -283,67 +282,66 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 					),
 				),
 				const Divider(height: 1),
-				// 全天行
-				SingleAllDayRow(
-					days: days,
-					events: allDayEvents,
-					gutterWidth: CalendarConstants.gutterWidth,
-					minHeight: 140,
-					maxHeight: 220,
-					isExpanded: _isTodayTasksExpanded,
-					onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
-				),
-				const Divider(height: 1),
-				FutureBuilder<List<List<String>>>(
-					future: () async {
-						final prefs = await SharedPreferences.getInstance();
-						final results = <List<String>>[];
-						for (final d in days) {
-							final scheduledIds = await DayWeekAiScheduler.getAiScheduledTaskIdsForDate(d);
-							final dayKey = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-							final titles = <String>[];
-							final seen = <String>{};
-
-							for (final t in taskListProvider.tasks) {
-								if (t.isCompleted) continue;
-								if (scheduledIds.contains(t.id)) continue;
-								if (!seen.add(t.id)) continue;
-
-								final due = t.dueDate;
-								if (due != null && due.year == d.year && due.month == d.month && due.day == d.day) {
-									titles.add(t.title);
-									continue;
-								}
-
-								final raw = prefs.getString('task_meta_v1_${t.id}');
-								if (raw == null || raw.trim().isEmpty) continue;
-								try {
-									final decoded = jsonDecode(raw);
-									if (decoded is! Map) continue;
-									final v = decoded['aiDueDates'];
-									if (v is! List) continue;
-									final has = v.any((e) => e.toString().startsWith(dayKey));
-									if (!has) continue;
-									titles.add(t.title);
-								} catch (_) {
-									continue;
+				// 全天行 & 待办行 (使用 DailyPlanProvider)
+				FutureBuilder<List<DailyPlanHive>>(
+					future: Future.wait(days.map((d) => context.read<DailyPlanProvider>().getPlanForDate(d))),
+					builder: (context, snapshot) {
+						final List<DailyPlanHive?> plans = snapshot.data ?? List<DailyPlanHive?>.filled(days.length, null);
+						
+						// 1. 全天任务
+						final List<CalendarEvent> planAllDayEvents = [];
+						for (int i = 0; i < plans.length; i++) {
+							final plan = plans[i];
+							if (plan == null) continue;
+							final date = days[i];
+							for (final id in plan.allDayTaskIds) {
+								final t = taskListProvider.getTaskById(id);
+								if (t != null) {
+									planAllDayEvents.add(CalendarEvent(
+										id: t.id,
+										title: t.title,
+										description: t.description ?? '',
+										allDay: true,
+										start: date,
+										end: date,
+										color: Colors.blue,
+										isCompleted: t.isCompleted,
+									));
 								}
 							}
-
-							results.add(titles);
 						}
-						return results;
-					}(),
-					builder: (context, snapshot) {
-						final weekTodos = snapshot.data ?? List<List<String>>.generate(days.length, (_) => const <String>[]);
-						return SingleTodoRow(
-							days: days,
-							todos: weekTodos,
-							gutterWidth: CalendarConstants.gutterWidth,
-							minHeight: 64,
-							maxHeight: 180,
-							isExpanded: _isTodayTodosExpanded,
-							onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+						final combinedAllDay = [...allDayEvents, ...planAllDayEvents];
+
+						// 2. 待办任务
+						final List<List<String>> weekTodos = [];
+						for (int i = 0; i < days.length; i++) {
+							final plan = plans[i];
+							final titles = plan?.todoTaskIds.map((id) => taskListProvider.getTaskById(id)?.title).whereType<String>().toList() ?? [];
+							weekTodos.add(titles);
+						}
+
+						return Column(
+							children: [
+								SingleAllDayRow(
+									days: days,
+									events: combinedAllDay,
+									gutterWidth: CalendarConstants.gutterWidth,
+									minHeight: 140,
+									maxHeight: 220,
+									isExpanded: _isTodayTasksExpanded,
+									onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
+								),
+								const Divider(height: 1),
+								SingleTodoRow(
+									days: days,
+									todos: weekTodos,
+									gutterWidth: CalendarConstants.gutterWidth,
+									minHeight: 64,
+									maxHeight: 180,
+									isExpanded: _isTodayTodosExpanded,
+									onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+								),
+							],
 						);
 					},
 				),

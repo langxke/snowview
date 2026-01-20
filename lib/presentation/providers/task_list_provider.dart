@@ -274,9 +274,23 @@ class TaskListProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 获取所有任务（公开方法）
+  List<ChecklistTaskHive> getAllTasks() {
+    return _repository.getAllTasks();
+  }
+  
   /// 根据日期获取任务
   List<ChecklistTaskHive> getTasksByDate(DateTime date) {
     return _repository.getTasksByDate(date);
+  }
+
+  /// 获取任务详情
+  ChecklistTaskHive? getTaskById(String id) {
+    try {
+      return _tasks.firstWhere((t) => t.id == id);
+    } catch (_) {
+      return null;
+    }
   }
 }
 
