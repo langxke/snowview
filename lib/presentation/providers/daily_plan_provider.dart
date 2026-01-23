@@ -17,7 +17,48 @@ class DailyPlanProvider extends ChangeNotifier {
     this._repository,
     this._taskRepository,
     this._calendarService,
-  );
+  ) {
+    _cleanupPastTodos();
+  }
+
+  /// 启动时清理过去日期的“今日待办”
+  Future<void> _cleanupPastTodos() async {
+    try {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final allPlans = _repository.getAllPlans();
+      int cleanedCount = 0;
+
+      for (final plan in allPlans) {
+        if (plan.todoTaskIds.isEmpty) continue;
+
+        final parts = plan.dateKey.split('-');
+        if (parts.length != 3) continue;
+        
+        final year = int.tryParse(parts[0]);
+        final month = int.tryParse(parts[1]);
+        final day = int.tryParse(parts[2]);
+        
+        if (year == null || month == null || day == null) continue;
+
+        final planDate = DateTime(year, month, day);
+        
+        // 如果是今天之前的计划，清空 todoTaskIds
+        if (planDate.isBefore(today)) {
+          plan.todoTaskIds.clear();
+          await _repository.savePlan(plan);
+          cleanedCount++;
+        }
+      }
+
+      if (cleanedCount > 0) {
+        debugPrint('[DailyPlanProvider] _cleanupPastTodos: Cleared todos for $cleanedCount past days');
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[DailyPlanProvider] _cleanupPastTodos error: $e');
+    }
+  }
 
   /// 缓存已加载的计划
   final Map<String, DailyPlanHive> _cache = {};
