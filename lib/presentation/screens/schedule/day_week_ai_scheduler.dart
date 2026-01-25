@@ -259,6 +259,48 @@ class DayWeekAiScheduler {
     await _unmarkTaskScheduledForDate(prefs: prefs, date: date, taskId: taskId);
   }
 
+  static Future<void> _saveReasoning({
+    required String scopeLabel, // 'day', 'week'
+    required String reasoning,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'ai_reasoning_latest_$scopeLabel'; // 固定 Key
+    final data = {
+      'timestamp': DateTime.now().toIso8601String(),
+      'reasoning': reasoning,
+    };
+    await prefs.setString(key, jsonEncode(data));
+  }
+
+  static Future<String?> getReasoning({
+    required String scopeLabel,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'ai_reasoning_latest_$scopeLabel';
+    final raw = prefs.getString(key);
+    if (raw == null || raw.isEmpty) return null;
+    
+    try {
+      final data = jsonDecode(raw);
+      if (data is Map) {
+        final tsStr = data['timestamp']?.toString();
+        final content = data['reasoning']?.toString();
+        if (content == null) return null;
+        
+        String timeDisplay = '';
+        if (tsStr != null) {
+          final ts = DateTime.tryParse(tsStr);
+          if (ts != null) {
+            final local = ts.toLocal();
+            timeDisplay = '[生成于 ${local.month}月${local.day}日 ${local.hour.toString().padLeft(2,'0')}:${local.minute.toString().padLeft(2,'0')}]\n';
+          }
+        }
+        return '$timeDisplay$content';
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static Future<void> runDaySmartSchedule(BuildContext context, {required DateTime day}) async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -450,15 +492,24 @@ class DayWeekAiScheduler {
         candidates: sourceTasks,
       ).timeout(const Duration(seconds: 90));
 
-      debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.length}');
+      debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.blocks.length}');
+
+      // 保存 Reasoning
+      String scopeKey;
+      if (scopeLabel == '当天') {
+          scopeKey = 'day';
+      } else {
+          scopeKey = 'week';
+      }
+      await _saveReasoning(scopeLabel: scopeKey, reasoning: plan.reasoning);
 
       final prefs = await SharedPreferences.getInstance();
 
       int created = 0;
-      for (int i = 0; i < plan.length; i++) {
-        final block = plan[i];
+      for (int i = 0; i < plan.blocks.length; i++) {
+        final block = plan.blocks[i];
         debugPrint(
-          '[DayWeekAiScheduler] createEvent[$i/${plan.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
+          '[DayWeekAiScheduler] createEvent[$i/${plan.blocks.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
         );
         
         // 创建 CalendarEventHive 对象（嵌入式）
@@ -638,7 +689,7 @@ class DayWeekAiScheduler {
     await prefs.remove('$_eventMetaPrefsPrefix$eventId');
   }
 
-  static Future<List<_TimeBlockPlan>> _callTimeBlockSchedulingAI({
+  static Future<({String reasoning, List<_TimeBlockPlan> blocks})> _callTimeBlockSchedulingAI({
     required AIService aiService,
     required DateTime rangeStart,
     required DateTime rangeEnd,
@@ -764,6 +815,11 @@ class DayWeekAiScheduler {
         '   - 仅当任务剩余预估时间不足 60 分钟，或空闲时间窗口很小时，才分配 30 分钟或 15 分钟的短块。\n'
         '3. **要事优先**：严格遵守任务优先级。高优先级任务必须优先安排在最早、最长的空闲时段。\n'
         '4. **紧凑排列**：End(Block N) 应等于 Start(Block N+1)，中间不留空隙。\n'
+        '5. **全范围覆盖**：必须充分利用 range.start 到 range.end 之间的所有可用时间。如果任务足够多，请确保最后一天（如周日）也被安排，不要因为是最后一天就忽略。\n'
+        '\n'
+        '格式要求：\n'
+        '- 所有时间字段请使用 "YYYY-MM-DD HH:mm" 格式（例如 "2026-01-24 09:00"）。\n'
+        '- 不要包含秒或毫秒。\n'
         '\n'
         '## 关键规则（必须遵守）\n'
         '1) 你不能创建新的任务，只能从 taskPool 中选择 taskId。\n'
@@ -775,22 +831,34 @@ class DayWeekAiScheduler {
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
-        '  "blocks": [\n'
-        '    {\n'
-        '      "taskId": "<string>",\n'
-        '      "title": "<string>",\n'
-        '      "start": "<ISO8601>",\n'
-        '      "end": "<ISO8601>"\n'
-        '    }\n'
-        '  ]\n'
+        '  "reasoning": "<在此处简要说明你的安排逻辑。要求：1. 必须使用通俗易懂的语言（如“优先安排了高优先级任务”、“利用了周末的空闲时间”），严禁使用“freeWindows”、“taskPool”等技术术语；2. 语言要简洁明了，让用户一眼就能看懂；3. 解释为什么这样安排，以及是否有任务因为时间不足而被推迟。>",\n'
+        '  "schedule": {\n'
+        '    "blocks": [\n'
+        '      {\n'
+        '        "taskId": "<string>",\n'
+        '        "title": "<string>",\n'
+        '        "start": "YYYY-MM-DD HH:mm",\n'
+        '        "end": "YYYY-MM-DD HH:mm"\n'
+        '      }\n'
+        '    ]\n'
+        '  }\n'
         '}';
+
+    String formatTime(DateTime d) {
+      final Y = d.year;
+      final M = d.month.toString().padLeft(2, '0');
+      final D = d.day.toString().padLeft(2, '0');
+      final h = d.hour.toString().padLeft(2, '0');
+      final m = d.minute.toString().padLeft(2, '0');
+      return '$Y-$M-$D $h:$m';
+    }
 
     final userPrompt = jsonEncode({
       'instruction': {
         'goal': '在 freeWindows 内生成紧凑的时间安排。优先完成高优先级任务；利用穿插策略缓解长任务疲劳；最大化时间利用率。',
         'range': {
-          'start': rangeStart.toIso8601String(),
-          'end': rangeEnd.toIso8601String(),
+          'start': formatTime(rangeStart),
+          'end': formatTime(rangeEnd),
         },
         'time_granularity_minutes': 15,
         'planning_strategy': {
@@ -804,13 +872,32 @@ class DayWeekAiScheduler {
           'notes': '任务已按优先级和截止日期排序。请优先安排列表靠前的任务。请尽可能为每个任务分配连续的长整块时间，减少任务切换。'
         }
       },
-      'busyEvents': busy,
-      'freeWindows': freeWindowsForAi,
-      'taskPool': taskItems,
+      'busyEvents': busy.map((e) => {
+        ...e,
+        'start': formatTime(DateTime.parse(e['start'] as String)),
+        'end': formatTime(DateTime.parse(e['end'] as String)),
+      }).toList(),
+      'freeWindows': freeWindowsForAi.map((day) => {
+        'date': day['date'],
+        'free': (day['free'] as List).map((w) => {
+          'start': formatTime(DateTime.parse(w['start'] as String)),
+          'end': formatTime(DateTime.parse(w['end'] as String)),
+        }).toList(),
+      }).toList(),
+      'taskPool': taskItems.map((t) {
+        final newItem = Map<String, dynamic>.from(t);
+        if (newItem['remindAt'] != null) {
+          newItem['remindAt'] = formatTime(DateTime.parse(newItem['remindAt'] as String));
+        }
+        return newItem;
+      }).toList(),
       'output_schema': {
-        'blocks': [
-          {'taskId': '<string>', 'title': '<string>', 'start': '<ISO8601>', 'end': '<ISO8601>'}
-        ]
+        'reasoning': '<string>',
+        'schedule': {
+          'blocks': [
+            {'taskId': '<string>', 'title': '<string>', 'start': 'YYYY-MM-DD HH:mm', 'end': 'YYYY-MM-DD HH:mm'}
+          ]
+        }
       }
     });
 
@@ -830,8 +917,19 @@ class DayWeekAiScheduler {
     final jsonStr = _extractJsonObject(text);
     final decoded = jsonDecode(jsonStr);
     if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
-    final blocks = decoded['blocks'];
-    if (blocks is! List) throw Exception('AI 输出缺少 blocks');
+    // 兼容旧格式（直接返回 blocks）或新格式（返回 reasoning + schedule）
+    List<dynamic> blocksRaw;
+    String reasoning = '';
+    
+    if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
+        blocksRaw = decoded['schedule']['blocks'] ?? [];
+        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+    } else if (decoded.containsKey('blocks')) {
+        blocksRaw = decoded['blocks'];
+        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+    } else {
+        throw Exception('AI 输出缺少 schedule.blocks 或 blocks');
+    }
 
     final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
     final usedIntervals = <({DateTime start, DateTime end})>[];
@@ -858,9 +956,9 @@ class DayWeekAiScheduler {
       return DateTime(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond);
     }
 
-    for (final item in blocks) {
+    for (final item in blocksRaw) {
       if (item is! Map) continue;
-      final taskId = item['taskId']?.toString().trim(); // Fix: trim taskId
+      final taskId = item['taskId']?.toString().trim();
       final title = item['title']?.toString();
       final startStr = item['start']?.toString();
       final endStr = item['end']?.toString();
@@ -966,7 +1064,7 @@ class DayWeekAiScheduler {
       ));
     }
 
-    return result;
+    return (reasoning: reasoning, blocks: result);
   }
 
   static String _extractJsonObject(String s) {

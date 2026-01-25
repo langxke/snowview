@@ -28,6 +28,45 @@ class MonthAiScheduler {
     }
   }
 
+  static Future<void> _saveReasoning({
+    required String reasoning,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'ai_reasoning_latest_month'; // 固定 Key
+    final data = {
+      'timestamp': DateTime.now().toIso8601String(),
+      'reasoning': reasoning,
+    };
+    await prefs.setString(key, jsonEncode(data));
+  }
+
+  static Future<String?> getReasoning() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'ai_reasoning_latest_month';
+    final raw = prefs.getString(key);
+    if (raw == null || raw.isEmpty) return null;
+    
+    try {
+      final data = jsonDecode(raw);
+      if (data is Map) {
+        final tsStr = data['timestamp']?.toString();
+        final content = data['reasoning']?.toString();
+        if (content == null) return null;
+        
+        String timeDisplay = '';
+        if (tsStr != null) {
+          final ts = DateTime.tryParse(tsStr);
+          if (ts != null) {
+            final local = ts.toLocal();
+            timeDisplay = '[生成于 ${local.month}月${local.day}日 ${local.hour.toString().padLeft(2,'0')}:${local.minute.toString().padLeft(2,'0')}]\n';
+          }
+        }
+        return '$timeDisplay$content';
+      }
+    } catch (_) {}
+    return null;
+  }
+
   static String _dateKey(DateTime d) {
     final mm = d.month.toString().padLeft(2, '0');
     final dd = d.day.toString().padLeft(2, '0');
@@ -68,7 +107,7 @@ class MonthAiScheduler {
 
     if (rangeStart.isAfter(monthEnd)) return;
 
-    final taskProvider = context.read<TaskListProvider>();
+    final taskProvider = context.read<TaskListProvider>(); // Now TaskListProvider is imported
     final dailyPlanProvider = context.read<DailyPlanProvider>();
     
     final candidates = taskProvider.tasks
@@ -110,12 +149,17 @@ class MonthAiScheduler {
 
     final closeLoading = _showBlockingLoading(context, 'AI 正在分析并安排…');
     try {
-      final assignments = await _callMonthSchedulingAI(
+      final result = await _callMonthSchedulingAI(
         aiService: aiService,
         today: rangeStart,
         monthEnd: monthEnd,
         candidates: candidates,
       );
+      final assignments = result.assignments;
+      final reasoning = result.reasoning;
+      
+      // 保存 Reasoning (固定 Key)
+      await _saveReasoning(reasoning: reasoning);
 
       final prefs = await SharedPreferences.getInstance();
       final byTaskId = <String, List<DateTime>>{};
@@ -373,7 +417,7 @@ class MonthAiScheduler {
     }
   }
 
-  static Future<List<_TaskAssignment>> _callMonthSchedulingAI({
+  static Future<({String reasoning, List<_TaskAssignment> assignments})> _callMonthSchedulingAI({
     required AIService aiService,
     required DateTime today,
     required DateTime monthEnd,
@@ -427,20 +471,25 @@ class MonthAiScheduler {
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
-        '  "assignments": [\n'
-        '    // 非循环任务：给一个日期\n'
-        '    { "taskId": "<string>", "date": "YYYY-MM-DD" },\n'
-        '    // 循环任务：给一个日期范围（客户端会按 repeat 规则展开）\n'
-        '    { "taskId": "<string>", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }\n'
-        '  ]\n'
+        '  "reasoning": "<在此处简要说明你的安排逻辑。要求：1. 必须使用通俗易懂的语言（如“优先安排了高优先级任务”、“已将循环任务铺满全月”），严禁使用“taskPool”、“assignments”等技术术语；2. 语言要简洁明了，让用户一眼就能看懂；3. 解释为什么这样安排。>",\n'
+        '  "schedule": {\n'
+        '    "assignments": [\n'
+        '      // 非循环任务：给一个日期\n'
+        '      { "taskId": "<string>", "date": "YYYY-MM-DD" },\n'
+        '      // 循环任务：给一个日期范围（客户端会按 repeat 规则展开）\n'
+        '      { "taskId": "<string>", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }\n'
+        '    ]\n'
+        '  }\n'
         '}\n'
         '\n'
         '## 正确示例（仅示例，实际要根据输入生成）\n'
         '{\n'
-        '  "assignments": [\n'
-        '    { "taskId": "t_001", "date": "2025-12-29" },\n'
-        '    { "taskId": "t_002", "start": "2025-12-29", "end": "2025-12-31" }\n'
-        '  ]\n'
+        '  "reasoning": "优先安排了高优先级的任务 t_001，并根据循环规则设定了 t_002 的范围。",\n'
+        '  "schedule": {\n'
+        '    "assignments": [\n'
+        '      { "taskId": "t_001", "date": "2025-12-29" }\n'
+        '    ]\n'
+        '  }\n'
         '}';
 
     final userPrompt = jsonEncode({
@@ -466,15 +515,21 @@ class MonthAiScheduler {
       },
       'taskPool': taskItems,
       'output_schema': {
-        'assignments': [
-          {'taskId': '<string>', 'date': 'YYYY-MM-DD'},
-          {'taskId': '<string>', 'start': 'YYYY-MM-DD', 'end': 'YYYY-MM-DD'}
-        ]
+        'reasoning': '<string>',
+        'schedule': {
+          'assignments': [
+            {'taskId': '<string>', 'date': 'YYYY-MM-DD'},
+            {'taskId': '<string>', 'start': 'YYYY-MM-DD', 'end': 'YYYY-MM-DD'}
+          ]
+        }
       },
       'example_output': {
-        'assignments': [
-          {'taskId': 't_001', 'date': _dateKey(today)},
-        ]
+        'reasoning': '...',
+        'schedule': {
+          'assignments': [
+            {'taskId': 't_001', 'date': _dateKey(today)},
+          ]
+        }
       }
     });
 
@@ -500,8 +555,20 @@ class MonthAiScheduler {
     _logLong('MonthAiScheduler', 'AI extracted json=$jsonStr');
     final decoded = jsonDecode(jsonStr);
     if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
-    final list = decoded['assignments'];
-    if (list is! List) throw Exception('AI 输出缺少 assignments');
+    
+    // 兼容旧格式（直接返回 assignments）或新格式（返回 reasoning + schedule）
+    List<dynamic> listRaw;
+    String reasoning = '';
+    
+    if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
+        listRaw = decoded['schedule']['assignments'] ?? [];
+        reasoning = decoded['reasoning']?.toString() ?? '';
+    } else if (decoded.containsKey('assignments')) {
+        listRaw = decoded['assignments'];
+        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+    } else {
+        throw Exception('AI 输出缺少 schedule.assignments 或 assignments');
+    }
 
     final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
     final start = DateTime(today.year, today.month, today.day);
@@ -560,7 +627,7 @@ class MonthAiScheduler {
     }
 
     final result = <_TaskAssignment>[];
-    for (final item in list) {
+    for (final item in listRaw) {
       if (item is! Map) continue;
       final taskId = item['taskId']?.toString();
       final dateStr = item['date']?.toString();
@@ -607,7 +674,7 @@ class MonthAiScheduler {
       }
     }
 
-    return result;
+    return (reasoning: reasoning, assignments: result);
   }
 
   static String _extractJsonObject(String s) {

@@ -37,6 +37,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   double? _dragWidth;
   double _resizeStartWidth = 0;
   double _resizeStartGlobalX = 0;
+  
+  String? _aiReasoning; // 存储当前视图对应的 AI 安排逻辑
 
   static const int _yearRange = 10; // 当前年 ±10 年
 
@@ -62,6 +64,30 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final now = DateTime.now();
     _year = now.year;
     _month = now.month;
+    _loadAiReasoning();
+  }
+
+  // 加载当前视图对应的 AI Reasoning
+  Future<void> _loadAiReasoning() async {
+    String? reasoning;
+    
+    switch (_view) {
+      case CalendarView.day:
+        reasoning = await DayWeekAiScheduler.getReasoning(scopeLabel: 'day');
+        break;
+      case CalendarView.week:
+        reasoning = await DayWeekAiScheduler.getReasoning(scopeLabel: 'week');
+        break;
+      case CalendarView.month:
+        reasoning = await MonthAiScheduler.getReasoning();
+        break;
+    }
+
+    if (mounted) {
+      setState(() {
+        _aiReasoning = reasoning;
+      });
+    }
   }
 
   // 获取包含任务会话的事件列表
@@ -226,6 +252,36 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             onPressed: _nextMonth,
           ),
           const Spacer(),
+          // AI 逻辑提示按钮 (始终显示，无数据时置灰)
+          Tooltip(
+            richMessage: WidgetSpan(
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 300),
+                child: Text(
+                  _aiReasoning ?? '暂无本次安排的逻辑说明。\n请先执行一次“AI智能安排”。',
+                  style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.5),
+                ),
+              ),
+            ),
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.9),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Container(
+              width: 32,
+              height: 32,
+              margin: const EdgeInsets.only(right: 8),
+              child: Icon(
+                Icons.info_outline, 
+                size: 18,
+                color: _aiReasoning != null 
+                    ? Theme.of(context).colorScheme.primary 
+                    : Colors.grey, // 无数据时置灰
+              ),
+            ),
+          ),
           if (_view == CalendarView.month) ...[
             TextButton.icon(
               icon: const Icon(Icons.auto_awesome),
@@ -286,6 +342,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     break;
                 }
               });
+              _loadAiReasoning(); // 切换视图类型时刷新
             },
             children: const [
               Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('日')),
@@ -401,6 +458,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       _year = now.year;
       _month = now.month;
     });
+    _loadAiReasoning();
   }
 
   // 添加活动
@@ -471,6 +529,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   Future<void> _onMonthAiSmartSchedule() async {
     await MonthAiScheduler.runSmartSchedule(context, year: _year, month: _month);
+    _loadAiReasoning(); // 刷新 reasoning
   }
 
   Future<void> _onMonthClearSchedule() async {
@@ -479,6 +538,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   Future<void> _onDayAiSmartSchedule() async {
     await DayWeekAiScheduler.runDaySmartSchedule(context, day: _selected);
+    _loadAiReasoning(); // 刷新 reasoning
   }
 
   Future<void> _onDayClearSchedule() async {
@@ -487,6 +547,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   Future<void> _onWeekAiSmartSchedule() async {
     await DayWeekAiScheduler.runWeekSmartSchedule(context, centerDate: _selected);
+    _loadAiReasoning(); // 刷新 reasoning
   }
 
   Future<void> _onWeekClearSchedule() async {
