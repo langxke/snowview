@@ -3,6 +3,12 @@ import 'dart:math' as math;
 import 'models.dart';
 import 'widgets.dart';
 
+class TodoPillItem {
+	final String id;
+	final String title;
+	const TodoPillItem({required this.id, required this.title});
+}
+
 class SingleAllDayRow extends StatelessWidget {
 	final List<DateTime> days;
 	final List<CalendarEvent> events;
@@ -11,6 +17,7 @@ class SingleAllDayRow extends StatelessWidget {
 	final double maxHeight; // 最大高度：超出后内部滚动
 	final bool isExpanded;
 	final VoidCallback? onToggleExpanded;
+	final Future<void> Function(CalendarEvent event, Offset globalPosition)? onSecondaryTapEvent;
 	const SingleAllDayRow({
 		super.key,
 		required this.days,
@@ -20,6 +27,7 @@ class SingleAllDayRow extends StatelessWidget {
 		this.maxHeight = 150.0,
 		this.isExpanded = true,
 		this.onToggleExpanded,
+		this.onSecondaryTapEvent,
 	});
 
 	@override
@@ -81,7 +89,7 @@ class SingleAllDayRow extends StatelessWidget {
 			);
 		}
 		final double fontSize = theme.textTheme.bodySmall?.fontSize ?? 12.0;
-		final double pillHeight = fontSize + 12.0; // 单条高度
+		final double pillHeight = fontSize + 16.0; // 单条高度
 		const double vGap = 0;
 		const int maxVisibleItems = 5; // 超过5个活动条时固定高度开始滚动
 		// perDay 已在上方计算
@@ -143,7 +151,16 @@ class SingleAllDayRow extends StatelessWidget {
 															crossAxisAlignment: CrossAxisAlignment.start,
 															children: [
 																for (int j = 0; j < perDay[i].length; j++) ...[
-																	SizedBox(height: pillHeight, child: EventPill(title: perDay[i][j].title, color: perDay[i][j].color)),
+																	SizedBox(
+																		height: pillHeight,
+																		child: GestureDetector(
+																			behavior: HitTestBehavior.opaque,
+																			onSecondaryTapDown: onSecondaryTapEvent == null
+																				? null
+																				: (d) => onSecondaryTapEvent!(perDay[i][j], d.globalPosition),
+																			child: EventPill(title: perDay[i][j].title, color: perDay[i][j].color),
+																		),
+																	),
 																	if (j != perDay[i].length - 1) SizedBox(height: vGap),
 																],
 															],
@@ -164,12 +181,13 @@ class SingleAllDayRow extends StatelessWidget {
 
 class SingleTodoRow extends StatelessWidget {
 	final List<DateTime> days;
-	final List<List<String>> todos;
+	final List<List<TodoPillItem>> todos;
 	final double gutterWidth;
 	final double minHeight;
 	final double maxHeight;
 	final bool isExpanded;
 	final VoidCallback? onToggleExpanded;
+	final Future<void> Function(DateTime date, TodoPillItem item, Offset globalPosition)? onSecondaryTapTodo;
 	const SingleTodoRow({
 		super.key,
 		required this.days,
@@ -179,6 +197,7 @@ class SingleTodoRow extends StatelessWidget {
 		this.maxHeight = 150.0,
 		this.isExpanded = true,
 		this.onToggleExpanded,
+		this.onSecondaryTapTodo,
 	});
 
 	@override
@@ -240,7 +259,7 @@ class SingleTodoRow extends StatelessWidget {
 			);
 		}
 		final double fontSize = theme.textTheme.bodySmall?.fontSize ?? 12.0;
-		final double pillHeight = fontSize + 12.0;
+		final double pillHeight = fontSize + 16.0;
 		const double vGap = 0;
 		const int maxVisibleItems = 5;
 		final int maxCount = todos.fold<int>(0, (m, l) => math.max(m, l.length));
@@ -299,7 +318,16 @@ class SingleTodoRow extends StatelessWidget {
 															crossAxisAlignment: CrossAxisAlignment.start,
 															children: [
 																for (int j = 0; j < todos[i].length; j++) ...[
-																	SizedBox(height: pillHeight, child: EventPill(title: todos[i][j], color: Colors.blueGrey)),
+																	SizedBox(
+																		height: pillHeight,
+																		child: GestureDetector(
+																			behavior: HitTestBehavior.opaque,
+																			onSecondaryTapDown: onSecondaryTapTodo == null
+																				? null
+																				: (d) => onSecondaryTapTodo!(days[i], todos[i][j], d.globalPosition),
+																			child: EventPill(title: todos[i][j].title, color: Colors.blueGrey),
+																		),
+																	),
 																	if (j != todos[i].length - 1) SizedBox(height: vGap),
 																],
 															],

@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
 import '../../data/repositories/ai_config_repository.dart';
 import '../../data/models/ai_config_hive.dart';
 import '../../services/ai_service.dart';
+import '../../services/app_data_reset_service.dart';
+import '../providers/daily_plan_provider.dart';
+import '../providers/focus_provider.dart';
+import '../providers/schedule_provider.dart';
+import '../providers/task_list_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -30,9 +36,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _obscureApiKey = true;
   double _temperature = 0.7;
   int _maxTokens = 2000;
+  int _maxJsonParseRetries = 3;
   bool _enableTools = true;
   bool _isTestingConnection = false;
   bool _hasValidConfig = false;
+  bool _isClearingAllData = false;
 
   @override
   void initState() {
@@ -226,6 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _modelController.text = config.model;
         _temperature = config.temperature;
         _maxTokens = config.maxTokens;
+        _maxJsonParseRetries = config.maxJsonParseRetries;
         _enableTools = config.enableTools;
         _hasValidConfig = config.isValid;
       });
@@ -265,6 +274,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         model: _modelController.text.trim(),
         temperature: _temperature,
         maxTokens: _maxTokens,
+        maxJsonParseRetries: _maxJsonParseRetries,
         enableTools: _enableTools,
         createdAt: _aiConfigRepo.getConfig()?.createdAt ?? DateTime.now(),
         updatedAt: DateTime.now(),
@@ -356,6 +366,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         model: _modelController.text.trim(),
         temperature: _temperature,
         maxTokens: _maxTokens,
+        maxJsonParseRetries: _maxJsonParseRetries,
         enableTools: _enableTools,
         createdAt: _aiConfigRepo.getConfig()?.createdAt ?? DateTime.now(),
         updatedAt: DateTime.now(),
@@ -452,8 +463,120 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           _buildAIConfigSettings(context),
           const SizedBox(height: 24),
+          _buildDataResetSection(context),
+          const SizedBox(height: 24),
           _buildAboutSection(context),
         ],
+      ),
+    );
+  }
+
+  Future<void> _confirmAndClearAllLocalData() async {
+    if (_isClearingAllData) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('清空所有本地数据？'),
+          content: const Text('此操作会清空任务、日程、今日计划、专注统计、聊天记录、AI 配置以及所有本地偏好设置，且不可恢复。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('清空'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _isClearingAllData = true;
+    });
+
+    if (mounted) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    try {
+      await AppDataResetService.clearAllLocalData();
+
+      if (!mounted) return;
+      await context.read<FocusProvider>().resetAfterDataCleared();
+      context.read<DailyPlanProvider>().resetCache();
+      await context.read<TaskListProvider>().refresh();
+      context.read<ScheduleProvider>().refresh();
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已清空所有本地数据，建议重启应用')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('清空失败: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isClearingAllData = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildDataResetSection(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 960),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+                    const SizedBox(width: 8),
+                    Text(
+                      '数据清理',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '用于清理遗留数据。清空后不可恢复。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _isClearingAllData ? null : _confirmAndClearAllLocalData,
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text('清空所有本地数据'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: theme.colorScheme.error,
+                    foregroundColor: theme.colorScheme.onError,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -813,6 +936,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (value) {
                     setState(() {
                       _maxTokens = value.round();
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // JSON解析最大重试次数
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('最大重试次数（解析错误）'),
+                    Text(
+                      _maxJsonParseRetries.toString(),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '当AI输出无法解析为JSON或不符合要求结构时，自动重试的最大次数',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Slider(
+                  value: _maxJsonParseRetries.toDouble(),
+                  min: 1,
+                  max: 5,
+                  divisions: 4,
+                  label: _maxJsonParseRetries.toString(),
+                  onChanged: (value) {
+                    setState(() {
+                      _maxJsonParseRetries = value.round();
                     });
                   },
                 ),

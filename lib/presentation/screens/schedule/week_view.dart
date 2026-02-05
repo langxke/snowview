@@ -287,13 +287,21 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 					future: Future.wait(days.map((d) => context.read<DailyPlanProvider>().getPlanForDate(d))),
 					builder: (context, snapshot) {
 						final List<DailyPlanHive?> plans = snapshot.data ?? List<DailyPlanHive?>.filled(days.length, null);
+						final dailyPlanProvider = context.read<DailyPlanProvider>();
+						String dateKey(DateTime d) {
+							final mm = d.month.toString().padLeft(2, '0');
+							final dd = d.day.toString().padLeft(2, '0');
+							return '${d.year}-$mm-$dd';
+						}
 						
 						// 1. 全天任务
 						final List<CalendarEvent> planAllDayEvents = [];
+						final Map<String, Set<String>> planAllDayTaskIdsByDate = {};
 						for (int i = 0; i < plans.length; i++) {
 							final plan = plans[i];
 							if (plan == null) continue;
 							final date = days[i];
+							planAllDayTaskIdsByDate[dateKey(date)] = plan.allDayTaskIds.toSet();
 							for (final id in plan.allDayTaskIds) {
 								final t = taskListProvider.getTaskById(id);
 								if (t != null) {
@@ -313,11 +321,52 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 						final combinedAllDay = [...allDayEvents, ...planAllDayEvents];
 
 						// 2. 待办任务
-						final List<List<String>> weekTodos = [];
+						final List<List<TodoPillItem>> weekTodos = [];
 						for (int i = 0; i < days.length; i++) {
 							final plan = plans[i];
-							final titles = plan?.todoTaskIds.map((id) => taskListProvider.getTaskById(id)?.title).whereType<String>().toList() ?? [];
-							weekTodos.add(titles);
+							final items = plan?.todoTaskIds.map((id) {
+								final t = taskListProvider.getTaskById(id);
+								if (t == null) return null;
+								return TodoPillItem(id: id, title: t.title);
+							}).whereType<TodoPillItem>().toList() ?? [];
+							weekTodos.add(items);
+						}
+
+						Future<void> showDeleteMenu(Offset globalPosition, {required Future<void> Function() onDelete}) async {
+							final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+							final selected = await showMenu<bool>(
+								context: context,
+								position: RelativeRect.fromLTRB(
+									globalPosition.dx,
+									globalPosition.dy,
+									overlay.size.width - globalPosition.dx,
+									overlay.size.height - globalPosition.dy,
+								),
+								items: const [
+									PopupMenuItem<bool>(
+										value: true,
+										child: Row(
+											children: [
+												Icon(Icons.delete_outline, size: 18, color: Colors.red),
+												SizedBox(width: 8),
+												Text('删除', style: TextStyle(color: Colors.red)),
+											],
+										),
+									),
+								],
+							);
+							if (selected == true) {
+								await onDelete();
+							}
+						}
+
+						Future<void> deleteCalendarEvent(CalendarEvent e) async {
+							final fn = widget.onDeleteEvent;
+							if (fn == null) return;
+							final result = fn(e);
+							if (result is Future) {
+								await result;
+							}
 						}
 
 						return Column(
@@ -330,6 +379,16 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 									maxHeight: 220,
 									isExpanded: _isTodayTasksExpanded,
 									onToggleExpanded: () => setState(() => _isTodayTasksExpanded = !_isTodayTasksExpanded),
+									onSecondaryTapEvent: (event, pos) async {
+										final key = dateKey(DateTime(event.start.year, event.start.month, event.start.day));
+										final plannedIds = planAllDayTaskIdsByDate[key] ?? const <String>{};
+										final isPlannedTask = plannedIds.contains(event.id);
+										if (isPlannedTask) {
+											await showDeleteMenu(pos, onDelete: () => dailyPlanProvider.removeAllDayTask(event.start, event.id));
+											return;
+										}
+										await showDeleteMenu(pos, onDelete: () => deleteCalendarEvent(event));
+									},
 								),
 								const Divider(height: 1),
 								SingleTodoRow(
@@ -340,6 +399,9 @@ class _WeekViewState extends State<WeekView> with CalendarStateMixin, CalendarGe
 									maxHeight: 180,
 									isExpanded: _isTodayTodosExpanded,
 									onToggleExpanded: () => setState(() => _isTodayTodosExpanded = !_isTodayTodosExpanded),
+									onSecondaryTapTodo: (date, item, pos) async {
+										await showDeleteMenu(pos, onDelete: () => dailyPlanProvider.removeTodoTask(date, item.id));
+									},
 								),
 							],
 						);

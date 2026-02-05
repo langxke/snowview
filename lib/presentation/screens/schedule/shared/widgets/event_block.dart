@@ -71,6 +71,13 @@ class CalendarEventBlock extends StatelessWidget {
                                  isSelected && 
                                  height > resizeHandleHeight;
 
+    // 判断是否为过期未完成事件
+    final bool isExpiredIncomplete = !event.isCompleted && event.end.isBefore(DateTime.now());
+
+    // 定义样式颜色
+    final baseColor = isExpiredIncomplete ? Colors.grey : event.color;
+    final handleColor = isExpiredIncomplete ? Colors.grey : event.color;
+
     return Positioned(
       left: leftOffset,
       right: width == null ? rightOffset : null,
@@ -80,13 +87,13 @@ class CalendarEventBlock extends StatelessWidget {
       child: Stack(
         children: [
           // 主活动块
-          _buildMainBlock(),
+          _buildMainBlock(isExpiredIncomplete),
           
           // 顶部调整手柄
           if (canShowHandles && onTopResizeStart != null)
             EventResizeHandle(
               isTop: true,
-              color: event.color,
+              color: handleColor,
               handleHeight: resizeHandleHeight,
               onPanStart: onTopResizeStart!,
               onPanUpdate: onTopResizeUpdate ?? (_) {},
@@ -97,7 +104,7 @@ class CalendarEventBlock extends StatelessWidget {
           if (canShowHandles && onBottomResizeStart != null)
             EventResizeHandle(
               isTop: false,
-              color: event.color,
+              color: handleColor,
               handleHeight: resizeHandleHeight,
               onPanStart: onBottomResizeStart!,
               onPanUpdate: onBottomResizeUpdate ?? (_) {},
@@ -109,31 +116,49 @@ class CalendarEventBlock extends StatelessWidget {
   }
 
   /// 构建主活动块
-  Widget _buildMainBlock() {
+  Widget _buildMainBlock(bool isExpiredIncomplete) {
+    // 根据状态决定颜色
+    final bgColor = isExpiredIncomplete 
+        ? Colors.grey.withOpacity(0.1) // 极浅灰背景
+        : event.color.withOpacity(isSelected ? 0.4 : 0.3);
+        
+    final borderColor = isExpiredIncomplete
+        ? Colors.grey.withOpacity(0.3) // 低对比度边框
+        : event.color.withOpacity(isSelected ? 0.8 : 0.6);
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: event.color.withOpacity(isSelected ? 0.4 : 0.3),
+        color: bgColor,
         borderRadius: BorderRadius.circular(6),
         border: Border.all(
-          color: event.color.withOpacity(isSelected ? 0.8 : 0.6),
+          color: borderColor,
           width: isSelected ? 2 : 1,
         ),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: height <= 30 ? _buildCompactLayout() : _buildExpandedLayout(),
+        child: height <= 30 
+            ? _buildCompactLayout(isExpiredIncomplete) 
+            : _buildExpandedLayout(isExpiredIncomplete),
       ),
     );
   }
 
   /// 构建紧凑布局（高度 <= 30px）
   /// 单行显示标题和时间
-  Widget _buildCompactLayout() {
+  Widget _buildCompactLayout(bool isExpiredIncomplete) {
+    final textColor = isExpiredIncomplete
+        ? Colors.grey.withOpacity(0.7)
+        : event.color.withOpacity(0.9);
+
     return Row(
       children: [
         if (event.isCompleted) ...[
           Icon(Icons.check_circle, size: 12, color: event.color),
+          const SizedBox(width: 4),
+        ] else if (isExpiredIncomplete) ...[
+          Icon(Icons.cancel, size: 12, color: textColor),
           const SizedBox(width: 4),
         ],
         Flexible(
@@ -141,7 +166,7 @@ class CalendarEventBlock extends StatelessWidget {
             '${event.title} ${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.start))}-${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.end))}',
             style: TextStyle(
               fontSize: 11,
-              color: event.color.withOpacity(0.9),
+              color: textColor,
               fontWeight: FontWeight.w600,
             ),
             overflow: TextOverflow.ellipsis,
@@ -154,7 +179,15 @@ class CalendarEventBlock extends StatelessWidget {
 
   /// 构建展开布局（高度 > 30px）
   /// 多行显示标题和时间
-  Widget _buildExpandedLayout() {
+  Widget _buildExpandedLayout(bool isExpiredIncomplete) {
+    final titleColor = isExpiredIncomplete
+        ? Colors.grey.withOpacity(0.7)
+        : event.color.withOpacity(0.9);
+        
+    final timeColor = isExpiredIncomplete
+        ? Colors.grey.withOpacity(0.5)
+        : event.color.withOpacity(0.7);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -163,13 +196,16 @@ class CalendarEventBlock extends StatelessWidget {
             if (event.isCompleted) ...[
               Icon(Icons.check_circle, size: 14, color: event.color),
               const SizedBox(width: 4),
+            ] else if (isExpiredIncomplete) ...[
+              Icon(Icons.cancel, size: 14, color: titleColor),
+              const SizedBox(width: 4),
             ],
             Expanded(
               child: Text(
                 event.title,
                 style: TextStyle(
                   fontSize: 12,
-                  color: event.color.withOpacity(0.9),
+                  color: titleColor,
                   fontWeight: FontWeight.w600,
                 ),
                 overflow: TextOverflow.ellipsis,
@@ -183,7 +219,7 @@ class CalendarEventBlock extends StatelessWidget {
             '${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.start))}-${TimeUtils.formatTime(TimeOfDay.fromDateTime(event.end))}',
             style: TextStyle(
               fontSize: 10,
-              color: event.color.withOpacity(0.7),
+              color: timeColor,
             ),
             overflow: TextOverflow.ellipsis,
             maxLines: 1,

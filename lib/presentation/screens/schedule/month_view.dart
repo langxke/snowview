@@ -6,8 +6,11 @@ class MonthView extends StatefulWidget {
 	final int year;
 	final int month;
 	final List<CalendarEvent> events;
-	final Map<String, List<String>> todosByDate;
+	final Map<String, List<MonthPlanItem>> todosByDate;
 	final Function(DateTime start, DateTime end) onAddEvent;
+	final Function(CalendarEvent event)? onDeleteEvent;
+	final Future<void> Function(DateTime date, MonthPlanItem item)? onRemovePlanItem;
+	final Future<void> Function(DateTime date, MonthPlanItemType type, String title)? onCreatePlanTask;
 	
 	const MonthView({
 		super.key,
@@ -16,6 +19,9 @@ class MonthView extends StatefulWidget {
 		required this.events,
 		required this.todosByDate,
 		required this.onAddEvent,
+		this.onDeleteEvent,
+		this.onRemovePlanItem,
+		this.onCreatePlanTask,
 	});
 
 	@override
@@ -81,75 +87,78 @@ class _MonthViewState extends State<MonthView> {
 		return LayoutBuilder(
 			builder: (context, constraints) {
 				final double gridWidth = constraints.maxWidth;
-				return Stack(
-					children: [
-						GridView.builder(
-							padding: EdgeInsets.zero,
-							gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-								crossAxisCount: 7,
-								childAspectRatio: 1.0,
-								mainAxisSpacing: 0,
-								crossAxisSpacing: 0,
-							),
-							itemCount: totalCells,
-							itemBuilder: (context, index) {
-								final date = indexToDate(index);
-								final inCurrentMonth = date.month == widget.month;
-								final bool isSelected = _selectedDates.any((d) => _isSameDate(d, date));
-								final dayEvents = widget.events.where((e) => e.intersects(date)).toList(growable: false);
-								final key = _dateKey(date);
-								final dayTodos = widget.todosByDate[key] ?? const <String>[];
-								return DayCell(
-									index: index,
-									totalCells: totalCells,
-									columns: columns,
-									date: date,
-									inCurrentMonth: inCurrentMonth,
-									isSelected: isSelected,
-									events: dayEvents,
-									todos: dayTodos,
-								);
-							},
+				return GestureDetector(
+					behavior: HitTestBehavior.translucent,
+					onTapDown: (d) => _lastTapLocal = d.localPosition,
+					onDoubleTap: () async {
+						if (_lastTapLocal == null) return;
+						final idx = posToIndex(_lastTapLocal!, gridWidth);
+						final date = indexToDate(idx);
+						setState(() {
+							_selectedDates = {_dateOnly(date)};
+						});
+						await widget.onAddEvent(_dateOnly(date), _dateOnly(date));
+						setState(() {
+							_selectedDates = {};
+						});
+					},
+					onPanStart: (d) {
+						final idx = posToIndex(d.localPosition, gridWidth);
+						final date = indexToDate(idx);
+						setState(() {
+							_selectedDates = {_dateOnly(date)};
+						});
+					},
+					onPanUpdate: (d) {
+						final idx = posToIndex(d.localPosition, gridWidth);
+						final date = indexToDate(idx);
+						if (_selectedDates.isEmpty) return;
+						final start = _selectedDates.first;
+						final range = _buildDateRange(_dateOnly(start), _dateOnly(date));
+						setState(() {
+							_selectedDates = range.toSet();
+						});
+					},
+					onPanEnd: (_) async {
+						if (_selectedDates.length <= 1) return;
+						final dates = _selectedDates.toList()..sort();
+						await widget.onAddEvent(dates.first, dates.last);
+						setState(() {
+							_selectedDates = {};
+						});
+					},
+					child: GridView.builder(
+						padding: EdgeInsets.zero,
+						gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+							crossAxisCount: 7,
+							childAspectRatio: 1.0,
+							mainAxisSpacing: 0,
+							crossAxisSpacing: 0,
 						),
-						// 手势层：双击/拖动选择
-						Positioned.fill(
-							child: GestureDetector(
-								behavior: HitTestBehavior.translucent,
-								onTapDown: (d) => _lastTapLocal = d.localPosition,
-								onDoubleTap: () async {
-									if (_lastTapLocal == null) return;
-									final idx = posToIndex(_lastTapLocal!, gridWidth);
-									final date = indexToDate(idx);
-									setState(() {
-										_selectedDates = { _dateOnly(date) };
-									});
-									await widget.onAddEvent(_dateOnly(date), _dateOnly(date));
-									setState(() { _selectedDates = {}; });
-								},
-								onPanStart: (d) {
-									final idx = posToIndex(d.localPosition, gridWidth);
-									final date = indexToDate(idx);
-									setState(() {
-										_selectedDates = { _dateOnly(date) };
-									});
-								},
-								onPanUpdate: (d) {
-									final idx = posToIndex(d.localPosition, gridWidth);
-									final date = indexToDate(idx);
-									if (_selectedDates.isEmpty) return;
-									final start = _selectedDates.first;
-									final range = _buildDateRange(_dateOnly(start), _dateOnly(date));
-									setState(() { _selectedDates = range.toSet(); });
-								},
-								onPanEnd: (_) async {
-									if (_selectedDates.length <= 1) return;
-									final dates = _selectedDates.toList()..sort();
-									await widget.onAddEvent(dates.first, dates.last);
-									setState(() { _selectedDates = {}; });
-								},
-							),
-						),
-					],
+						itemCount: totalCells,
+						itemBuilder: (context, index) {
+							final date = indexToDate(index);
+							final inCurrentMonth = date.month == widget.month;
+							final bool isSelected = _selectedDates.any((d) => _isSameDate(d, date));
+							final dayEvents = widget.events.where((e) => e.intersects(date)).toList(growable: false);
+							final key = _dateKey(date);
+							final dayTodos = widget.todosByDate[key] ?? const <MonthPlanItem>[];
+							return DayCell(
+								index: index,
+								totalCells: totalCells,
+								columns: columns,
+								date: date,
+								inCurrentMonth: inCurrentMonth,
+								isSelected: isSelected,
+								events: dayEvents,
+								todos: dayTodos,
+								onAddEvent: widget.onAddEvent,
+								onDeleteEvent: widget.onDeleteEvent,
+								onRemovePlanItem: widget.onRemovePlanItem,
+								onCreatePlanTask: widget.onCreatePlanTask,
+							);
+						},
+					),
 				);
 			},
 		);

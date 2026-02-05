@@ -144,7 +144,7 @@ class CalendarDatabaseService {
   Future<void> deleteMultipleEvents(List<String> eventIds) async {
     await _box.deleteAll(eventIds);
   }
-  
+
   // 搜索活动（按标题）
   List<CalendarEventHive> searchEventsByTitle(String query) {
     final lowerQuery = query.toLowerCase();

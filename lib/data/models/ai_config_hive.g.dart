@@ -27,13 +27,14 @@ class AIConfigHiveAdapter extends TypeAdapter<AIConfigHive> {
       createdAt: fields[7] as DateTime,
       updatedAt: fields[8] as DateTime,
       aiMode: fields[9] == null ? 'action' : fields[9] as String,
+      maxJsonParseRetries: fields[10] == null ? 3 : fields[10] as int,
     );
   }
 
   @override
   void write(BinaryWriter writer, AIConfigHive obj) {
     writer
-      ..writeByte(10)
+      ..writeByte(11)
       ..writeByte(0)
       ..write(obj.provider)
       ..writeByte(1)
@@ -53,7 +54,9 @@ class AIConfigHiveAdapter extends TypeAdapter<AIConfigHive> {
       ..writeByte(8)
       ..write(obj.updatedAt)
       ..writeByte(9)
-      ..write(obj.aiMode);
+      ..write(obj.aiMode)
+      ..writeByte(10)
+      ..write(obj.maxJsonParseRetries);
   }
 
   @override

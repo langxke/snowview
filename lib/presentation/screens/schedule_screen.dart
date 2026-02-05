@@ -10,8 +10,6 @@ import 'schedule/week_view.dart';
 import 'schedule/month_view.dart';
 import 'schedule/month_ai_scheduler.dart';
 import 'schedule/day_week_ai_scheduler.dart';
-import '../../services/calendar_database_service.dart';
-import '../providers/schedule_provider.dart';
 import '../providers/task_list_provider.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/daily_plan_provider.dart'; // Import DailyPlanProvider
@@ -390,16 +388,16 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         // 使用传入的 plans，不再重复调用 provider
         
         // 构造 todosByDate
-        final Map<String, List<String>> todosByDate = {};
+        final Map<String, List<MonthPlanItem>> todosByDate = {};
         plans.forEach((date, plan) {
           final key = _dateKey(date);
-          final titles = <String>[];
+          final items = <MonthPlanItem>[];
           
           // 1. 全天任务
           for (final id in plan.allDayTaskIds) {
              final t = taskListProvider.getTaskById(id);
              if (t != null && !t.isCompleted) {
-               titles.add(t.title);
+               items.add(MonthPlanItem(taskId: id, title: t.title, type: MonthPlanItemType.allDayTask));
              }
           }
           
@@ -407,12 +405,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           for (final id in plan.todoTaskIds) {
              final t = taskListProvider.getTaskById(id);
              if (t != null && !t.isCompleted) {
-               titles.add(t.title);
+               items.add(MonthPlanItem(taskId: id, title: t.title, type: MonthPlanItemType.todoTask));
              }
           }
           
-          if (titles.isNotEmpty) {
-            todosByDate[key] = titles;
+          if (items.isNotEmpty) {
+            todosByDate[key] = items;
           }
         });
 
@@ -422,6 +420,27 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             events: allEvents,
             todosByDate: todosByDate,
             onAddEvent: _openAddEventDialog,
+            onDeleteEvent: _deleteEvent,
+            onRemovePlanItem: (date, item) async {
+              final dailyPlanProvider = context.read<DailyPlanProvider>();
+              if (item.type == MonthPlanItemType.allDayTask) {
+                await dailyPlanProvider.removeAllDayTask(date, item.taskId);
+              } else {
+                await dailyPlanProvider.removeTodoTask(date, item.taskId);
+              }
+            },
+            onCreatePlanTask: (date, type, title) async {
+              final t = title.trim();
+              if (t.isEmpty) return;
+              final newId = await context.read<TaskListProvider>().createTaskReturningId(title: t);
+              if (newId == null) return;
+              final dailyPlanProvider = context.read<DailyPlanProvider>();
+              if (type == MonthPlanItemType.allDayTask) {
+                await dailyPlanProvider.addAllDayTask(date, newId);
+              } else {
+                await dailyPlanProvider.addTodoTask(date, newId);
+              }
+            },
         );
 
       case CalendarView.week:

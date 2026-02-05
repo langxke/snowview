@@ -63,6 +63,11 @@ class DailyPlanProvider extends ChangeNotifier {
   /// 缓存已加载的计划
   final Map<String, DailyPlanHive> _cache = {};
 
+  void resetCache() {
+    _cache.clear();
+    notifyListeners();
+  }
+
   /// 获取指定日期的计划（支持懒加载迁移）
   Future<DailyPlanHive> getPlanForDate(DateTime date) async {
     final dateKey = _dateToKey(date);

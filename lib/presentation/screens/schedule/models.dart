@@ -72,3 +72,17 @@ const List<Color> eventColors = [
 ];
 
 enum CalendarView { day, week, month }
+
+enum MonthPlanItemType { allDayTask, todoTask }
+
+class MonthPlanItem {
+	final String taskId;
+	final String title;
+	final MonthPlanItemType type;
+
+	const MonthPlanItem({
+		required this.taskId,
+		required this.title,
+		required this.type,
+	});
+}

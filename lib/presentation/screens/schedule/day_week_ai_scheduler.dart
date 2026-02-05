@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/utils/date_utils.dart';
 import '../../../data/models/openai/openai_models.dart';
 import '../../../data/repositories/ai_config_repository.dart';
 import '../../../services/ai_service.dart';
@@ -19,6 +21,7 @@ class DayWeekAiScheduler {
 
   static const String _eventMetaPrefsPrefix = 'event_meta_v1_';
   static const String _eventMetaAiKey = 'ai';
+  static const String _eventMetaOriginDateKey = 'originDateKey';
   static const String _scheduledTaskIdsByDatePrefix = 'ai_scheduled_task_ids_v1_';
 
 
@@ -54,11 +57,38 @@ class DayWeekAiScheduler {
 
   static DateTime _dayEnd(DateTime d) => DateTime(d.year, d.month, d.day, 23, 59, 59);
 
+  static ({DateTime rangeStart, DateTime rangeEnd}) computeWeekRange({
+    required DateTime now,
+    required DateTime centerDate,
+    required bool startFromNowIfToday,
+  }) {
+    final today = _dayStart(DateTime(now.year, now.month, now.day));
+    final centerDay = _dayStart(centerDate);
+
+    final weekStartMon = _dayStart(centerDay.subtract(Duration(days: centerDay.weekday - 1)));
+    final weekEndSun = _dayEnd(weekStartMon.add(const Duration(days: 6)));
+
+    final startDay = weekStartMon.isAfter(today) ? weekStartMon : today;
+    final start = startDay == today && startFromNowIfToday ? now : startDay;
+
+    return (rangeStart: start, rangeEnd: weekEndSun);
+  }
+
   static String _dateOnlyKey(DateTime d) {
     final dd = DateTime(d.year, d.month, d.day);
     final mm = dd.month.toString().padLeft(2, '0');
     final day = dd.day.toString().padLeft(2, '0');
     return '${dd.year}-$mm-$day';
+  }
+
+  static DateTime? _tryParseDateOnlyKey(String key) {
+    final parts = key.split('-');
+    if (parts.length != 3) return null;
+    final year = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final day = int.tryParse(parts[2]);
+    if (year == null || month == null || day == null) return null;
+    return DateTime(year, month, day);
   }
 
   static String _scheduledTaskKeyForDate(DateTime d) => '$_scheduledTaskIdsByDatePrefix${_dateOnlyKey(d)}';
@@ -312,15 +342,9 @@ class DayWeekAiScheduler {
 
   static Future<void> runWeekSmartSchedule(BuildContext context, {required DateTime centerDate}) async {
     final now = DateTime.now();
-    final today = _dayStart(DateTime(now.year, now.month, now.day));
-    final centerDay = _dayStart(centerDate);
-
-    // 本周定义：从“今天/所选日期（取较晚者）”开始，到该周周日结束；
-    // 且如果 start 是今天，则从当前时间开始（避免安排到今天已经过去的时间）。
-    final weekStartMon = _dayStart(centerDay.subtract(Duration(days: centerDay.weekday - 1)));
-    final weekEndSun = _dayEnd(weekStartMon.add(const Duration(days: 6)));
-    final startDay = centerDay.isAfter(today) ? centerDay : today;
-    final start = startDay == today ? now : startDay;
+    final r = computeWeekRange(now: now, centerDate: centerDate, startFromNowIfToday: true);
+    final start = r.rangeStart;
+    final weekEndSun = r.rangeEnd;
 
     if (start.isAfter(weekEndSun)) {
       // 当天已超过本周范围（极端情况：start 在下周），退化为当天
@@ -339,12 +363,9 @@ class DayWeekAiScheduler {
 
   static Future<void> runWeekClearSchedule(BuildContext context, {required DateTime centerDate}) async {
     final now = DateTime.now();
-    final today = _dayStart(DateTime(now.year, now.month, now.day));
-    final centerDay = _dayStart(centerDate);
-
-    final weekStartMon = _dayStart(centerDay.subtract(Duration(days: centerDay.weekday - 1)));
-    final weekEndSun = _dayEnd(weekStartMon.add(const Duration(days: 6)));
-    final start = centerDay.isAfter(today) ? centerDay : today;
+    final r = computeWeekRange(now: now, centerDate: centerDate, startFromNowIfToday: false);
+    final start = r.rangeStart;
+    final weekEndSun = r.rangeEnd;
 
     if (start.isAfter(weekEndSun)) {
       await _runClearSchedule(context, rangeStart: start, rangeEnd: _dayEnd(start), scopeLabel: '本周');
@@ -480,8 +501,17 @@ class DayWeekAiScheduler {
     final busyEvents = scheduleProvider.getEventsInRange(rangeStart, rangeEnd)
         .where((e) => !e.allDay)
         .toList(growable: false);
+    final plansInRange = await dailyPlanProvider.getPlansForRange(rangeStart, rangeEnd);
+    final todoOwnerDateKeyByTaskId = <String, String>{};
+    for (final plan in plansInRange.values) {
+      final dateKey = plan.dateKey;
+      for (final taskId in plan.todoTaskIds) {
+        todoOwnerDateKeyByTaskId.putIfAbsent(taskId, () => dateKey);
+      }
+    }
 
     final closeLoading = _showBlockingLoading(context, 'AI 正在生成时间安排…');
+    final scopeKey = scopeLabel == '当天' ? 'day' : 'week';
     try {
       debugPrint('[DayWeekAiScheduler] smartSchedule start scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd');
       final plan = await _callTimeBlockSchedulingAI(
@@ -494,23 +524,19 @@ class DayWeekAiScheduler {
 
       debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.blocks.length}');
 
-      // 保存 Reasoning
-      String scopeKey;
-      if (scopeLabel == '当天') {
-          scopeKey = 'day';
-      } else {
-          scopeKey = 'week';
-      }
       await _saveReasoning(scopeLabel: scopeKey, reasoning: plan.reasoning);
 
       final prefs = await SharedPreferences.getInstance();
 
       int created = 0;
+      final removedFromTodoTaskIds = <String>{};
       for (int i = 0; i < plan.blocks.length; i++) {
         final block = plan.blocks[i];
         debugPrint(
           '[DayWeekAiScheduler] createEvent[$i/${plan.blocks.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
         );
+        final originDateKey = todoOwnerDateKeyByTaskId[block.taskId];
+        final originDate = originDateKey == null ? null : _tryParseDateOnlyKey(originDateKey);
         
         // 创建 CalendarEventHive 对象（嵌入式）
         final event = CalendarEventHive(
@@ -529,9 +555,11 @@ class DayWeekAiScheduler {
 
         // 关键修复：任务被安排到时间块后，从今日待办中移除
         debugPrint('[DayWeekAiScheduler] removing todo task: date=${block.start} taskId=${block.taskId}');
-        await dailyPlanProvider.removeTodoTask(block.start, block.taskId);
+        if (removedFromTodoTaskIds.add(block.taskId)) {
+          await dailyPlanProvider.removeTodoTask(originDate ?? block.start, block.taskId);
+        }
         
-        await _writeEventMetaAi(prefs: prefs, eventId: event.id).timeout(const Duration(seconds: 5));
+        await _writeEventMetaAi(prefs: prefs, eventId: event.id, originDateKey: originDateKey).timeout(const Duration(seconds: 5));
         await _markTaskScheduledForDate(prefs: prefs, date: block.start, taskId: block.taskId).timeout(const Duration(seconds: 5));
         created++;
         await Future<void>.delayed(Duration.zero);
@@ -546,6 +574,10 @@ class DayWeekAiScheduler {
       );
     } catch (e) {
       debugPrint('[DayWeekAiScheduler] smartSchedule error=$e');
+      final errText = e.toString();
+      if (errText.contains('输出解析失败') || errText.contains('JSON')) {
+        await _saveReasoning(scopeLabel: scopeKey, reasoning: 'AI 输出解析失败：$errText');
+      }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI 安排失败：$e')),
@@ -622,8 +654,8 @@ class DayWeekAiScheduler {
     for (final plan in plans.values) {
         final events = List<CalendarEventHive>.from(plan.scheduledEvents); // 复制一份列表以避免并发修改
         for (final e in events) {
-            final isAi = _readEventMetaAi(prefs: prefs, eventId: e.id);
-            if (!isAi) continue;
+            final meta = _readEventMeta(prefs: prefs, eventId: e.id);
+            if (!meta.ai) continue;
             
             // 检查是否在请求的时间范围内 (虽然 getPlansForRange 已经筛选了日期，但 DailyPlan 是按天聚合的)
             if (e.start.isBefore(rangeStart) || e.end.isAfter(rangeEnd)) continue;
@@ -643,14 +675,10 @@ class DayWeekAiScheduler {
             if (taskId != null && taskId.isNotEmpty) {
                 await _unmarkTaskScheduledForDate(prefs: prefs, date: e.start, taskId: taskId).timeout(const Duration(seconds: 5));
                 
-                // 关键修复：清理AI时间块后，将任务放回今日待办
-                // 仅当任务未完成时才放回？
-                // 逻辑上：如果用户完成了任务，Task.isCompleted 为 true。
-                // 我们调用 addTodoTask，如果任务已完成，UI 可能会过滤，或者 DailyPlanProvider 不关心完成状态。
-                // 这里的 addTodoTask 只添加 ID 到列表。
-                // 我们最好检查一下 Task 状态，但这里拿不到 Task 对象，只拿到 ID。
-                // 简单起见，先加回去。UI 层负责根据 isCompleted 决定是否显示在待办列表。
-                await dailyPlanProvider.addTodoTask(e.start, taskId);
+                final restoreDate = meta.originDateKey == null
+                    ? _dayStart(e.start)
+                    : (_tryParseDateOnlyKey(meta.originDateKey!) ?? _dayStart(e.start));
+                await dailyPlanProvider.addTodoTask(restoreDate, taskId);
             }
             cleared++;
             await Future<void>.delayed(Duration.zero);
@@ -668,21 +696,205 @@ class DayWeekAiScheduler {
     return rest.isEmpty ? null : rest;
   }
 
-  static Future<void> _writeEventMetaAi({required SharedPreferences prefs, required String eventId}) async {
+  static Future<void> _writeEventMetaAi({
+    required SharedPreferences prefs,
+    required String eventId,
+    String? originDateKey,
+  }) async {
     final key = '$_eventMetaPrefsPrefix$eventId';
-    await prefs.setString(key, jsonEncode({_eventMetaAiKey: true}));
+    final data = <String, dynamic>{_eventMetaAiKey: true};
+    if (originDateKey != null && originDateKey.trim().isNotEmpty) {
+      data[_eventMetaOriginDateKey] = originDateKey;
+    }
+    await prefs.setString(key, jsonEncode(data));
   }
 
-  static bool _readEventMetaAi({required SharedPreferences prefs, required String eventId}) {
+  static ({bool ai, String? originDateKey}) _readEventMeta({
+    required SharedPreferences prefs,
+    required String eventId,
+  }) {
     final raw = prefs.getString('$_eventMetaPrefsPrefix$eventId');
-    if (raw == null || raw.trim().isEmpty) return false;
+    if (raw == null || raw.trim().isEmpty) return (ai: false, originDateKey: null);
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return false;
-      return decoded[_eventMetaAiKey] == true;
+      if (decoded is! Map) return (ai: false, originDateKey: null);
+      final ai = decoded[_eventMetaAiKey] == true;
+      final origin = decoded[_eventMetaOriginDateKey]?.toString();
+      return (ai: ai, originDateKey: origin);
     } catch (_) {
+      return (ai: false, originDateKey: null);
+    }
+  }
+
+  @visibleForTesting
+  static DateTime? tryParseDateOnlyKeyForTest(String key) => _tryParseDateOnlyKey(key);
+
+  @visibleForTesting
+  static Future<void> writeEventMetaAiForTest({
+    required SharedPreferences prefs,
+    required String eventId,
+    String? originDateKey,
+  }) =>
+      _writeEventMetaAi(prefs: prefs, eventId: eventId, originDateKey: originDateKey);
+
+  @visibleForTesting
+  static ({bool ai, String? originDateKey}) readEventMetaForTest({
+    required SharedPreferences prefs,
+    required String eventId,
+  }) =>
+      _readEventMeta(prefs: prefs, eventId: eventId);
+
+  @visibleForTesting
+  static ({List<Map<String, dynamic>> violations, List<Map<String, dynamic>> normalizedBlocks}) validateAiBlocksForTest({
+    required List<dynamic> raw,
+    required Set<String> allowedIds,
+    required DateTime effectiveStart,
+    required DateTime effectiveEnd,
+    required Map<String, List<({DateTime start, DateTime end})>> freeWindows,
+    required Map<String, List<Map<String, int>>> availabilityRanges,
+    required List<CalendarEvent> busy,
+  }) {
+    String formatTime(DateTime d) {
+      final Y = d.year;
+      final M = d.month.toString().padLeft(2, '0');
+      final D = d.day.toString().padLeft(2, '0');
+      final h = d.hour.toString().padLeft(2, '0');
+      final m = d.minute.toString().padLeft(2, '0');
+      return '$Y-$M-$D $h:$m';
+    }
+
+    DateTime? parseAsLocal(String? s) {
+      if (s == null) return null;
+      final d = DateTime.tryParse(s);
+      if (d == null) return null;
+      return DateTime(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond);
+    }
+
+    bool withinAnyAvailabilityRange({
+      required DateTime start,
+      required DateTime end,
+      required List<Map<String, int>> ranges,
+    }) {
+      final startM = start.hour * 60 + start.minute;
+      final endM = end.hour * 60 + end.minute;
+      for (final r in ranges) {
+        final s = r['startMinutes'];
+        final e = r['endMinutes'];
+        if (s == null || e == null) continue;
+        if (startM >= s && endM <= e) return true;
+      }
       return false;
     }
+
+    final violations = <Map<String, dynamic>>[];
+    final normalized = <Map<String, dynamic>>[];
+
+    for (final item in raw) {
+      if (item is! Map) {
+        violations.add({'reason': 'invalid_item', 'raw': item.toString()});
+        continue;
+      }
+      final taskId = item['taskId']?.toString().trim();
+      final title = item['title']?.toString();
+      final startStr = item['start']?.toString();
+      final endStr = item['end']?.toString();
+      if (taskId == null || taskId.isEmpty || title == null || startStr == null || endStr == null) {
+        violations.add({'reason': 'missing_fields', 'taskId': taskId, 'title': title, 'start': startStr, 'end': endStr});
+        continue;
+      }
+      if (!allowedIds.contains(taskId)) {
+        violations.add({'reason': 'unknown_task_id', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+
+      final start = parseAsLocal(startStr);
+      final end = parseAsLocal(endStr);
+      if (start == null || end == null) {
+        violations.add({'reason': 'invalid_datetime', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+      if (!end.isAfter(start)) {
+        violations.add({'reason': 'non_positive_duration', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+      if (start.year != end.year || start.month != end.month || start.day != end.day) {
+        violations.add({'reason': 'cross_day', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+      if (start.isBefore(effectiveStart) || end.isAfter(effectiveEnd)) {
+        violations.add({
+          'reason': 'out_of_range',
+          'taskId': taskId,
+          'start': startStr,
+          'end': endStr,
+          'rangeStart': formatTime(effectiveStart),
+          'rangeEnd': formatTime(effectiveEnd),
+        });
+        continue;
+      }
+
+      final dayKey = _dateOnlyKey(start);
+      final ranges = availabilityRanges[dayKey] ?? const <Map<String, int>>[];
+      if (ranges.isEmpty || !withinAnyAvailabilityRange(start: start, end: end, ranges: ranges)) {
+        violations.add({'reason': 'out_of_availability', 'taskId': taskId, 'start': startStr, 'end': endStr, 'date': dayKey});
+        continue;
+      }
+
+      final dayFree = freeWindows[dayKey] ?? const <({DateTime start, DateTime end})>[];
+      if (!_blockWithinAnyWindow(start: start, end: end, windows: dayFree)) {
+        violations.add({'reason': 'out_of_free_windows', 'taskId': taskId, 'start': startStr, 'end': endStr, 'date': dayKey});
+        continue;
+      }
+
+      final blockMinutes = end.difference(start).inMinutes;
+      if (blockMinutes < 15) {
+        violations.add({'reason': 'too_short', 'taskId': taskId, 'start': startStr, 'end': endStr, 'minutes': blockMinutes});
+        continue;
+      }
+      if (start.minute % 15 != 0 || end.minute % 15 != 0 || blockMinutes % 15 != 0) {
+        violations.add({'reason': 'not_15min_granularity', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+
+      if (_overlapsBusy(start: start, end: end, busyEvents: busy)) {
+        violations.add({'reason': 'overlaps_busy', 'taskId': taskId, 'start': startStr, 'end': endStr});
+        continue;
+      }
+
+      normalized.add({'taskId': taskId, 'title': title, 'start': start, 'end': end});
+    }
+
+    if (violations.isNotEmpty) {
+      return (violations: violations, normalizedBlocks: normalized);
+    }
+
+    final sorted = [...normalized]..sort((a, b) => (a['start'] as DateTime).compareTo(b['start'] as DateTime));
+    for (int i = 0; i < sorted.length - 1; i++) {
+      final a = sorted[i];
+      final b = sorted[i + 1];
+      final aStart = a['start'] as DateTime;
+      final aEnd = a['end'] as DateTime;
+      final bStart = b['start'] as DateTime;
+      final bEnd = b['end'] as DateTime;
+      if (bStart.isBefore(aEnd) && bEnd.isAfter(aStart)) {
+        violations.add({
+          'reason': 'overlaps_another_block',
+          'a': {
+            'taskId': a['taskId'],
+            'start': formatTime(aStart),
+            'end': formatTime(aEnd),
+          },
+          'b': {
+            'taskId': b['taskId'],
+            'start': formatTime(bStart),
+            'end': formatTime(bEnd),
+          },
+        });
+        break;
+      }
+    }
+
+    return (violations: violations, normalizedBlocks: sorted);
   }
 
   static Future<void> _clearEventMetaAi({required SharedPreferences prefs, required String eventId}) async {
@@ -696,6 +908,9 @@ class DayWeekAiScheduler {
     required List<CalendarEvent> busyEvents,
     required List<dynamic> candidates,
   }) async {
+    final normalizedRangeStart = DateUtilsEx.floorToMinute(rangeStart);
+    final normalizedRangeEnd = DateUtilsEx.floorToMinute(rangeEnd);
+
     final availability = await _loadAvailability();
 
     final prefs = await SharedPreferences.getInstance();
@@ -739,7 +954,7 @@ class DayWeekAiScheduler {
     final freeWindowsByDayKey = <String, List<({DateTime start, DateTime end})>>{};
     final freeWindowsForAi = <Map<String, dynamic>>[];
 
-    for (DateTime day = _dayStart(rangeStart); !day.isAfter(_dayStart(rangeEnd)); day = day.add(const Duration(days: 1))) {
+    for (DateTime day = _dayStart(normalizedRangeStart); !day.isAfter(_dayStart(normalizedRangeEnd)); day = day.add(const Duration(days: 1))) {
       final dayKey = _dateOnlyKey(day);
       final ranges = _rangesForDate(
         date: day,
@@ -754,8 +969,8 @@ class DayWeekAiScheduler {
         if (DateTime(b.start.year, b.start.month, b.start.day) != day && DateTime(b.end.year, b.end.month, b.end.day) != day) {
           // 快速过滤：既不是当天开始也不是当天结束的事件，后面仍会通过 overlap 校验挡住；这里先略过
         }
-        final start = b.start;
-        final end = b.end;
+        final start = DateUtilsEx.floorToMinute(b.start);
+        final end = DateUtilsEx.ceilToMinute(b.end);
         if (!end.isAfter(start)) continue;
         // 裁剪到当天边界
         final ds = _dayStart(day);
@@ -771,8 +986,8 @@ class DayWeekAiScheduler {
       for (final r in ranges) {
         var ws = _applyMinutes(day, r.startMinutes);
         var we = _applyMinutes(day, r.endMinutes);
-        if (ws.isBefore(rangeStart)) ws = rangeStart;
-        if (we.isAfter(rangeEnd)) we = rangeEnd;
+        if (ws.isBefore(normalizedRangeStart)) ws = normalizedRangeStart;
+        if (we.isAfter(normalizedRangeEnd)) we = normalizedRangeEnd;
         if (!we.isAfter(ws)) continue;
 
         final busyOverlappingWindow = dayBusy
@@ -800,6 +1015,34 @@ class DayWeekAiScheduler {
       });
     }
 
+    // Calculate effective range limits from freeWindows to prevent AI from hallucinating blocks outside availability
+    DateTime effectiveRangeStart = normalizedRangeStart;
+    DateTime effectiveRangeEnd = normalizedRangeEnd;
+    
+    DateTime? minFreeStart;
+    DateTime? maxFreeEnd;
+
+    for (final windows in freeWindowsByDayKey.values) {
+      for (final w in windows) {
+        if (minFreeStart == null || w.start.isBefore(minFreeStart)) minFreeStart = w.start;
+        if (maxFreeEnd == null || w.end.isAfter(maxFreeEnd)) maxFreeEnd = w.end;
+      }
+    }
+    
+    // Only tighten the range
+    if (minFreeStart != null && minFreeStart.isAfter(effectiveRangeStart)) {
+      effectiveRangeStart = minFreeStart;
+    }
+    if (maxFreeEnd != null && maxFreeEnd.isBefore(effectiveRangeEnd)) {
+      effectiveRangeEnd = maxFreeEnd;
+    }
+
+    final daysWithFree = freeWindowsByDayKey.entries.where((e) => e.value.isNotEmpty).length;
+    final daysTotal = freeWindowsByDayKey.length;
+    debugPrint(
+      '[DayWeekAiScheduler] freeWindows summary daysWithFree=$daysWithFree/$daysTotal effectiveRangeStart=$effectiveRangeStart effectiveRangeEnd=$effectiveRangeEnd',
+    );
+
     final systemPrompt =
         '你是一个严格的“日历时间块排期引擎（Time-Block Scheduling Engine）”。\n'
         '你要把任务安排到具体的时间段中，并生成日程块。\n'
@@ -825,9 +1068,14 @@ class DayWeekAiScheduler {
         '1) 你不能创建新的任务，只能从 taskPool 中选择 taskId。\n'
         '2) 你必须避开 busyEvents 中的忙碌时间段，不能产生冲突。\n'
         '3) 所有输出的 start/end 必须落在 freeWindows 提供的空闲时间段内。\n'
+        '   并且必须满足：start >= range.start 且 end <= range.end（按分钟比较，包含边界）。\n'
         '4) 你不能安排跨天时间块（start 与 end 必须在同一天）。\n'
+        '5) 你输出的所有时间块之间必须两两不重叠（包含不同任务之间也不能重叠）。\n'
+        '   若多个任务竞争同一时间段，保留更高优先级/更靠前任务，并把其他任务顺延到后续空闲时间。\n'
         '5) 每个时间块必须 end > start，且以 15 分钟为粒度；并且每个时间块的时长必须 >= 15 分钟。\n'
+        '6) taskPool 中的 estimatedMinutes 仅为参考信息，不是硬性上限；允许同一任务在不同日期重复安排。\n'
         '6) 你必须只输出纯 JSON，不允许输出解释/Markdown/代码块。\n'
+        '7) blocks 必须按 start 升序输出。\n'
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
@@ -855,15 +1103,16 @@ class DayWeekAiScheduler {
 
     final userPrompt = jsonEncode({
       'instruction': {
-        'goal': '在 freeWindows 内生成紧凑的时间安排。优先完成高优先级任务；利用穿插策略缓解长任务疲劳；最大化时间利用率。',
+        'goal': '在 freeWindows 内生成紧凑的时间安排。优先完成高优先级任务；最大化时间利用率；尽可能填满所有空闲时间，不要主动留空。',
         'range': {
-          'start': formatTime(rangeStart),
-          'end': formatTime(rangeEnd),
+          'start': formatTime(effectiveRangeStart),
+          'end': formatTime(effectiveRangeEnd),
         },
         'time_granularity_minutes': 15,
         'planning_strategy': {
           'maximize_total_scheduled_minutes': true,
           'allow_multiple_blocks_per_task': true,
+          'allow_overlaps': false,
           'prefer_tight_scheduling': true,
           'minimize_gaps': true,
           'minimize_fragmentation': true,
@@ -903,168 +1152,326 @@ class DayWeekAiScheduler {
 
     _logLong('DayWeekAiScheduler', 'Request userPrompt=$userPrompt');
 
-    final resp = await aiService.chat(
-      messages: [OpenAIChatMessage.text(role: OpenAIMessageRole.user, content: userPrompt)],
-      systemPrompt: systemPrompt,
-      tools: null,
-    );
+    int maxJsonParseRetries = 3;
+    try {
+      maxJsonParseRetries = AIConfigRepository().getConfig()?.maxJsonParseRetries ?? 3;
+    } catch (_) {
+      maxJsonParseRetries = 3;
+    }
 
-    final msg = resp.choices.isNotEmpty ? resp.choices.first.message : null;
-    _logLong('DayWeekAiScheduler', 'AI message.toJson=${jsonEncode(msg?.toJson() ?? {})}');
-    final text = msg?.textContent ?? '';
-    _logLong('DayWeekAiScheduler', 'AI raw textContent=$text');
+    String clip(String s, int maxChars) {
+      if (s.length <= maxChars) return s;
+      return s.substring(0, maxChars);
+    }
 
-    final jsonStr = _extractJsonObject(text);
-    final decoded = jsonDecode(jsonStr);
-    if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
-    // 兼容旧格式（直接返回 blocks）或新格式（返回 reasoning + schedule）
-    List<dynamic> blocksRaw;
+    String buildRetryNote({required int attempt, required String error, required String lastRawOutput}) {
+      return jsonEncode({
+        'instruction': {
+          'goal': '上一次输出解析失败，请根据原始输入重新输出符合要求的纯 JSON。',
+          'attempt': attempt,
+          'previous_error': error,
+          'must_follow': [
+            '只输出纯 JSON（不要 Markdown/代码块/解释）',
+            '严格匹配 output_schema',
+            'blocks 必须按 start 升序输出',
+          ],
+        },
+        'previous_output': clip(lastRawOutput, 1200),
+      });
+    }
+
+    Exception? lastError;
+    String lastRawText = '';
+    List<dynamic>? blocksRaw;
     String reasoning = '';
-    
-    if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
-        blocksRaw = decoded['schedule']['blocks'] ?? [];
-        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
-    } else if (decoded.containsKey('blocks')) {
-        blocksRaw = decoded['blocks'];
-        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
-    } else {
-        throw Exception('AI 输出缺少 schedule.blocks 或 blocks');
+    List<Map<String, dynamic>> lastViolations = const [];
+    bool lastWasValidationError = false;
+    List<_TimeBlockPlan>? parsedBlocks;
+    String parsedReasoning = '';
+
+    Map<String, List<Map<String, int>>> buildAvailabilityByDayKey() {
+      final out = <String, List<Map<String, int>>>{};
+      for (final entry in freeWindowsByDayKey.entries) {
+        final day = _tryParseDateOnlyKey(entry.key);
+        if (day == null) continue;
+        final ranges = _rangesForDate(
+          date: day,
+          weekday: availability.weekday,
+          weekend: availability.weekend,
+          workdays: availability.workdays,
+        );
+        out[entry.key] = ranges
+            .map((r) => {
+                  'startMinutes': r.startMinutes,
+                  'endMinutes': r.endMinutes,
+                })
+            .toList(growable: false);
+      }
+      return out;
     }
 
+    final availabilityByDayKey = buildAvailabilityByDayKey();
     final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
-    final usedIntervals = <({DateTime start, DateTime end})>[];
-    final allocatedMinutesByTaskId = <String, int>{};
-    const maxBlocksPerTask = 32;
-    final blocksCountByTaskId = <String, int>{};
 
-    final estMinutesByTaskId = <String, int?>{
-      for (final item in taskItems)
-        item['id'].toString(): (item['estimatedMinutes'] is int
-            ? item['estimatedMinutes'] as int
-            : int.tryParse(item['estimatedMinutes']?.toString() ?? '')),
-    };
-
-    final result = <_TimeBlockPlan>[];
-
-    // Helper: 强制将 AI 返回的时间视为本地 Wall-Clock Time
-    // AI 往往会给时间加上 'Z' 后缀（因为 prompt 要求 ISO8601），但实际上它是基于 prompt 里的本地时间生成的。
-    // 如果直接解析为 UTC，会导致时区偏移（例如 UTC+8 会偏 8 小时），从而导致此时间块与 freeWindows（本地时间）对不上。
-    DateTime? parseAsLocal(String? s) {
-      if (s == null) return null;
-      final d = DateTime.tryParse(s);
-      if (d == null) return null;
-      return DateTime(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond);
-    }
-
-    for (final item in blocksRaw) {
-      if (item is! Map) continue;
-      final taskId = item['taskId']?.toString().trim();
-      final title = item['title']?.toString();
-      final startStr = item['start']?.toString();
-      final endStr = item['end']?.toString();
-      if (taskId == null || title == null || startStr == null || endStr == null) continue;
-      if (!allowedIds.contains(taskId)) continue;
-      final start = parseAsLocal(startStr);
-      final end = parseAsLocal(endStr);
-      if (start == null || end == null) continue;
-      if (!end.isAfter(start)) continue;
-
-      if (start.isBefore(rangeStart) || end.isAfter(rangeEnd)) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of range start=$start end=$end');
-        continue;
+    ({List<Map<String, dynamic>> violations, List<Map<String, dynamic>> normalizedBlocks}) validateAiBlocks({
+      required List<dynamic> raw,
+      required Set<String> allowedIds,
+      required DateTime effectiveStart,
+      required DateTime effectiveEnd,
+      required Map<String, List<({DateTime start, DateTime end})>> freeWindows,
+      required Map<String, List<Map<String, int>>> availabilityRanges,
+      required List<CalendarEvent> busy,
+    }) {
+      DateTime? parseAsLocal(String? s) {
+        if (s == null) return null;
+        final d = DateTime.tryParse(s);
+        if (d == null) return null;
+        return DateTime(d.year, d.month, d.day, d.hour, d.minute, d.second, d.millisecond, d.microsecond);
       }
 
-      if (start.year != end.year || start.month != end.month || start.day != end.day) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) crosses day start=$start end=$end');
-        continue;
+      bool withinAnyAvailabilityRange({
+        required DateTime start,
+        required DateTime end,
+        required List<Map<String, int>> ranges,
+      }) {
+        final startM = start.hour * 60 + start.minute;
+        final endM = end.hour * 60 + end.minute;
+        for (final r in ranges) {
+          final s = r['startMinutes'];
+          final e = r['endMinutes'];
+          if (s == null || e == null) continue;
+          if (startM >= s && endM <= e) return true;
+        }
+        return false;
       }
 
-      final baseRanges = _rangesForDate(
-        date: start,
-        weekday: availability.weekday,
-        weekend: availability.weekend,
-        workdays: availability.workdays,
-      );
-      if (!_blockWithinAnyRange(start: start, end: end, ranges: baseRanges)) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of availabilityRanges start=$start end=$end');
-        continue;
+      final violations = <Map<String, dynamic>>[];
+      final normalized = <Map<String, dynamic>>[];
+
+      for (final item in raw) {
+        if (item is! Map) {
+          violations.add({'reason': 'invalid_item', 'raw': item.toString()});
+          continue;
+        }
+        final taskId = item['taskId']?.toString().trim();
+        final title = item['title']?.toString();
+        final startStr = item['start']?.toString();
+        final endStr = item['end']?.toString();
+        if (taskId == null || taskId.isEmpty || title == null || startStr == null || endStr == null) {
+          violations.add({'reason': 'missing_fields', 'taskId': taskId, 'title': title, 'start': startStr, 'end': endStr});
+          continue;
+        }
+        if (!allowedIds.contains(taskId)) {
+          violations.add({'reason': 'unknown_task_id', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+
+        final start = parseAsLocal(startStr);
+        final end = parseAsLocal(endStr);
+        if (start == null || end == null) {
+          violations.add({'reason': 'invalid_datetime', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+        if (!end.isAfter(start)) {
+          violations.add({'reason': 'non_positive_duration', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+        if (start.year != end.year || start.month != end.month || start.day != end.day) {
+          violations.add({'reason': 'cross_day', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+        if (start.isBefore(effectiveStart) || end.isAfter(effectiveEnd)) {
+          violations.add({
+            'reason': 'out_of_range',
+            'taskId': taskId,
+            'start': startStr,
+            'end': endStr,
+            'rangeStart': formatTime(effectiveStart),
+            'rangeEnd': formatTime(effectiveEnd),
+          });
+          continue;
+        }
+
+        final dayKey = _dateOnlyKey(start);
+        final ranges = availabilityRanges[dayKey] ?? const <Map<String, int>>[];
+        if (ranges.isEmpty || !withinAnyAvailabilityRange(start: start, end: end, ranges: ranges)) {
+          violations.add({'reason': 'out_of_availability', 'taskId': taskId, 'start': startStr, 'end': endStr, 'date': dayKey});
+          continue;
+        }
+
+        final dayFree = freeWindows[dayKey] ?? const <({DateTime start, DateTime end})>[];
+        if (!_blockWithinAnyWindow(start: start, end: end, windows: dayFree)) {
+          violations.add({'reason': 'out_of_free_windows', 'taskId': taskId, 'start': startStr, 'end': endStr, 'date': dayKey});
+          continue;
+        }
+
+        final blockMinutes = end.difference(start).inMinutes;
+        if (blockMinutes < 15) {
+          violations.add({'reason': 'too_short', 'taskId': taskId, 'start': startStr, 'end': endStr, 'minutes': blockMinutes});
+          continue;
+        }
+        if (start.minute % 15 != 0 || end.minute % 15 != 0 || blockMinutes % 15 != 0) {
+          violations.add({'reason': 'not_15min_granularity', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+
+        if (_overlapsBusy(start: start, end: end, busyEvents: busy)) {
+          violations.add({'reason': 'overlaps_busy', 'taskId': taskId, 'start': startStr, 'end': endStr});
+          continue;
+        }
+
+        normalized.add({'taskId': taskId, 'title': title, 'start': start, 'end': end});
       }
 
-      final dayKey = _dateOnlyKey(start);
-      final dayFree = freeWindowsByDayKey[dayKey] ?? const <({DateTime start, DateTime end})>[];
-      if (!_blockWithinAnyWindow(start: start, end: end, windows: dayFree)) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) out of freeWindows start=$start end=$end');
-        continue;
+      if (violations.isNotEmpty) {
+        return (violations: violations, normalizedBlocks: normalized);
       }
 
-      bool overlapNew = false;
-      for (final u in usedIntervals) {
-        if (start.isBefore(u.end) && end.isAfter(u.start)) {
-          overlapNew = true;
+      final sorted = [...normalized]..sort((a, b) => (a['start'] as DateTime).compareTo(b['start'] as DateTime));
+      for (int i = 0; i < sorted.length - 1; i++) {
+        final a = sorted[i];
+        final b = sorted[i + 1];
+        final aStart = a['start'] as DateTime;
+        final aEnd = a['end'] as DateTime;
+        final bStart = b['start'] as DateTime;
+        final bEnd = b['end'] as DateTime;
+        if (bStart.isBefore(aEnd) && bEnd.isAfter(aStart)) {
+          violations.add({
+            'reason': 'overlaps_another_block',
+            'a': {
+              'taskId': a['taskId'],
+              'start': formatTime(aStart),
+              'end': formatTime(aEnd),
+            },
+            'b': {
+              'taskId': b['taskId'],
+              'start': formatTime(bStart),
+              'end': formatTime(bEnd),
+            },
+          });
           break;
         }
       }
-      if (overlapNew) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) overlaps another new block start=$start end=$end');
-        continue;
-      }
 
-      final blockMinutes = end.difference(start).inMinutes;
-      if (blockMinutes < 15) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) too short minutes=$blockMinutes start=$start end=$end');
-        continue;
-      }
-      final currentBlocks = blocksCountByTaskId[taskId] ?? 0;
-      if (currentBlocks >= maxBlocksPerTask) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) exceeds maxBlocksPerTask=$maxBlocksPerTask');
-        continue;
-      }
+      return (violations: violations, normalizedBlocks: sorted);
+    }
 
-      final est = estMinutesByTaskId[taskId];
-      if (est != null) {
-        final already = allocatedMinutesByTaskId[taskId] ?? 0;
-        if (already >= est) {
-          debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) already meets estimatedMinutes=$est');
+    for (int attempt = 1; attempt <= maxJsonParseRetries; attempt++) {
+      _logLong('DayWeekAiScheduler', 'AI request attempt=$attempt max=$maxJsonParseRetries');
+      final messages = <OpenAIChatMessage>[
+        if (attempt > 1 && lastWasValidationError)
+          OpenAIChatMessage.text(
+            role: OpenAIMessageRole.user,
+            content: jsonEncode({
+              'instruction': {
+                'goal': '上一次输出的时间块不满足规则，请修复违规项并重新输出完整的纯 JSON。',
+                'attempt': attempt,
+                'must_follow': [
+                  '只输出纯 JSON（不要 Markdown/代码块/解释）',
+                  '严格匹配 output_schema',
+                  '所有 start/end 必须落在 freeWindows 内',
+                  '不得跨天，不得重叠',
+                  '时间粒度为 15 分钟，且单块时长 >= 15 分钟',
+                  'blocks 必须按 start 升序输出',
+                ],
+                'violations': lastViolations.take(20).toList(growable: false),
+              },
+              'previous_output': clip(lastRawText, 1200),
+            }),
+          ),
+        if (attempt > 1 && !lastWasValidationError)
+          OpenAIChatMessage.text(
+            role: OpenAIMessageRole.user,
+            content: buildRetryNote(attempt: attempt, error: lastError.toString(), lastRawOutput: lastRawText),
+          ),
+        OpenAIChatMessage.text(role: OpenAIMessageRole.user, content: userPrompt),
+      ];
+
+      try {
+        final resp = await aiService.chat(
+          messages: messages,
+          systemPrompt: systemPrompt,
+          tools: null,
+        );
+
+        final msg = resp.choices.isNotEmpty ? resp.choices.first.message : null;
+        _logLong('DayWeekAiScheduler', 'AI message.toJson=${jsonEncode(msg?.toJson() ?? {})}');
+        final text = msg?.textContent ?? '';
+        lastRawText = text;
+        _logLong('DayWeekAiScheduler', 'AI raw textContent=$text');
+
+        final jsonStr = _extractJsonObject(text);
+        final decoded = jsonDecode(jsonStr);
+        if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
+        // 兼容旧格式（直接返回 blocks）或新格式（返回 reasoning + schedule）
+
+        if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
+          final schedule = decoded['schedule'];
+          final raw = (schedule as Map)['blocks'];
+          if (raw is! List) throw Exception('AI 输出 schedule.blocks 不是数组');
+          blocksRaw = raw;
+          reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+        } else if (decoded.containsKey('blocks')) {
+          final raw = decoded['blocks'];
+          if (raw is! List) throw Exception('AI 输出 blocks 不是数组');
+          blocksRaw = raw;
+          reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+        } else {
+          throw Exception('AI 输出缺少 schedule.blocks 或 blocks');
+        }
+
+        final validation = validateAiBlocksForTest(
+          raw: blocksRaw!,
+          allowedIds: allowedIds,
+          effectiveStart: effectiveRangeStart,
+          effectiveEnd: effectiveRangeEnd,
+          freeWindows: freeWindowsByDayKey,
+          availabilityRanges: availabilityByDayKey,
+          busy: busyEvents,
+        );
+
+        if (validation.violations.isNotEmpty) {
+          lastWasValidationError = true;
+          lastViolations = validation.violations;
+          lastError = Exception('AI 输出时间块不满足规则: ${validation.violations.first['reason']}');
+          blocksRaw = null;
+          reasoning = '';
+          if (attempt >= maxJsonParseRetries) {
+            break;
+          }
           continue;
         }
-        if (already + blockMinutes > est + 15) {
-          debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) would exceed estimatedMinutes=$est');
-          continue;
-        }
-      }
 
-      if (_overlapsBusy(start: start, end: end, busyEvents: busyEvents)) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) overlaps busy start=$start end=$end');
-        continue;
-      }
-
-      // 最后再做一次冲突过滤（防 AI 输出冲突）
-      bool conflict = false;
-      for (final b in busyEvents) {
-        if (b.allDay) continue;
-        if (start.isBefore(b.end) && end.isAfter(b.start)) {
-          conflict = true;
+        parsedBlocks = validation.normalizedBlocks
+            .map(
+              (b) => _TimeBlockPlan(
+                taskId: b['taskId'] as String,
+                title: b['title'] as String,
+                start: b['start'] as DateTime,
+                end: b['end'] as DateTime,
+              ),
+            )
+            .toList(growable: false);
+        parsedReasoning = reasoning;
+        break;
+      } catch (e) {
+        lastError = e is Exception ? e : Exception(e.toString());
+        _logLong('DayWeekAiScheduler', 'AI parse attempt=$attempt failed error=$e');
+        blocksRaw = null;
+        reasoning = '';
+        lastWasValidationError = false;
+        lastViolations = const [];
+        if (attempt >= maxJsonParseRetries) {
           break;
         }
       }
-      if (conflict) {
-        debugPrint('[DayWeekAiScheduler] drop block(taskId=$taskId) conflicts start=$start end=$end');
-        continue;
-      }
-
-      allocatedMinutesByTaskId[taskId] = (allocatedMinutesByTaskId[taskId] ?? 0) + blockMinutes;
-      blocksCountByTaskId[taskId] = currentBlocks + 1;
-      usedIntervals.add((start: start, end: end));
-
-      result.add(_TimeBlockPlan(
-        taskId: taskId,
-        title: title,
-        start: start,
-        end: end,
-      ));
     }
 
-    return (reasoning: reasoning, blocks: result);
+    if (parsedBlocks == null) {
+      throw Exception('AI 输出生成失败（已重试 $maxJsonParseRetries 次）：${lastError ?? '未知错误'}');
+    }
+
+    return (reasoning: parsedReasoning, blocks: parsedBlocks);
   }
 
   static String _extractJsonObject(String s) {

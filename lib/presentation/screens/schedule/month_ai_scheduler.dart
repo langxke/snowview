@@ -67,6 +67,21 @@ class MonthAiScheduler {
     return null;
   }
 
+  @visibleForTesting
+  static Future<({String reasoning, Map<String, List<String>> byTaskId})> callMonthSchedulingAIForTest({
+    required AIService aiService,
+    required DateTime today,
+    required DateTime monthEnd,
+    required List<dynamic> candidates,
+  }) async {
+    final res = await _callMonthSchedulingAI(aiService: aiService, today: today, monthEnd: monthEnd, candidates: candidates);
+    final byTaskId = <String, List<String>>{};
+    for (final a in res.assignments) {
+      (byTaskId[a.taskId] ??= <String>[]).add(_dateKey(a.date));
+    }
+    return (reasoning: res.reasoning, byTaskId: byTaskId);
+  }
+
   static String _dateKey(DateTime d) {
     final mm = d.month.toString().padLeft(2, '0');
     final dd = d.day.toString().padLeft(2, '0');
@@ -180,17 +195,10 @@ class MonthAiScheduler {
         
         // 可选：记录 AI 元数据以便清空（虽然现在清空逻辑也可以改为扫描 DailyPlan）
         // 为了兼容性，我们仍然写入元数据，但不再修改 Task.dueDate
-        final repeat = _readTaskRepeat(prefs: prefs, taskId: taskId);
-        final isRecurring = repeat != null && repeat.trim().isNotEmpty && repeat.trim() != 'none';
-        
-        if (isRecurring) {
-            await _writeTaskMetaAiDueDates(prefs: prefs, taskId: taskId, dates: dates);
-        } else {
-            // 对于非循环任务，如果是 AI 安排的，我们只记录元数据，不修改 Task 的物理 dueDate
-            // 这样任务在列表中还是“无日期”，但在日历上通过 DailyPlan 显示
-            if (dates.isNotEmpty) {
-                 await _writeTaskMetaAiDueDate(prefs: prefs, taskId: taskId, date: dates.first);
-            }
+        if (dates.length >= 2) {
+          await _writeTaskMetaAiDueDates(prefs: prefs, taskId: taskId, dates: dates);
+        } else if (dates.isNotEmpty) {
+          await _writeTaskMetaAiDueDate(prefs: prefs, taskId: taskId, date: dates.first);
         }
         
         applied += dates.length;
@@ -206,6 +214,10 @@ class MonthAiScheduler {
         SnackBar(content: Text('AI 已安排 $applied 条任务到本月日历')),
       );
     } catch (e) {
+      final errText = e.toString();
+      if (errText.contains('输出解析失败') || errText.contains('JSON')) {
+        await _saveReasoning(reasoning: 'AI 输出解析失败：$errText');
+      }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI 安排失败：$e')),
@@ -456,38 +468,37 @@ class MonthAiScheduler {
         '\n'
         '## 你的用途\n'
         '- 输入：一批未完成的清单任务（taskPool）+ 可用日期范围（range）。\n'
-        '- 输出：为部分或全部任务分配一个截止日期（due date），用于把任务展示在月视图日历上。\n'
+        '- 输出：为部分或全部任务分配具体日期，用于把任务展示在月视图日历上。\n'
         '\n'
         '## 关键规则（必须遵守）\n'
         '1) 你【绝对不能】创建新的任务，只能从 taskPool 中挑选并分配日期。\n'
         '2) 你输出的每一条 assignment 必须使用 taskPool 里已有的 taskId。\n'
-        '3) date/start/end 必须在 range.start 与 range.end（含）之间，格式必须是 YYYY-MM-DD。\n'
-        '4) taskPool 中可能包含 repeat 字段（none|daily|weekly|monthly|workdays|weekends）。\n'
-        '   - 当 repeat != none 时，表示循环任务：你【不要】逐日输出，而是输出一个日期范围 start/end（同一个 taskId 只需要出现一次），客户端会按 repeat 规则自动展开到每一天/每周等。\n'
-        '   - 对于循环任务，推荐直接使用 range.start 作为 start、range.end 作为 end（即覆盖整个范围）。\n'
-        '5) 不允许输出解释、Markdown、代码块、前后缀文字。你必须输出【纯 JSON】。\n'
+        '3) 所有日期必须在 range.start 与 range.end（含）之间，格式必须是 YYYY-MM-DD。\n'
+        '4) taskPool 中可能包含 description（备注）和 repeat（循环提示）等信息。\n'
+        '   - 备注（description）仅作为参考偏好：在可行的情况下尽可能满足，但可以折中。\n'
+        '   - repeat 仅作为参考提示（不需要假设客户端会做任何自动展开）。\n'
+        '5) 你必须输出【纯 JSON】；不要输出解释、Markdown、代码块、前后缀文字。\n'
         '6) 如果无法安排某个任务，可以不输出该任务（即 assignments 里可以缺省）。\n'
         '7) 输出必须可被 JSON.parse 解析。\n'
         '\n'
         '## 输出 JSON Schema（必须严格匹配）\n'
         '{\n'
-        '  "reasoning": "<在此处简要说明你的安排逻辑。要求：1. 必须使用通俗易懂的语言（如“优先安排了高优先级任务”、“已将循环任务铺满全月”），严禁使用“taskPool”、“assignments”等技术术语；2. 语言要简洁明了，让用户一眼就能看懂；3. 解释为什么这样安排。>",\n'
+        '  "reasoning": "<在此处简要说明你的安排逻辑。要求：1. 必须使用通俗易懂的语言，严禁使用“taskPool”、“assignments”等技术术语；2. 语言要简洁明了，让用户一眼就能看懂；3. 解释为什么这样安排，以及哪些备注偏好被满足/被折中。>",\n'
         '  "schedule": {\n'
         '    "assignments": [\n'
-        '      // 非循环任务：给一个日期\n'
         '      { "taskId": "<string>", "date": "YYYY-MM-DD" },\n'
-        '      // 循环任务：给一个日期范围（客户端会按 repeat 规则展开）\n'
-        '      { "taskId": "<string>", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }\n'
+        '      { "taskId": "<string>", "dates": ["YYYY-MM-DD", "..."] }\n'
         '    ]\n'
         '  }\n'
         '}\n'
         '\n'
         '## 正确示例（仅示例，实际要根据输入生成）\n'
         '{\n'
-        '  "reasoning": "优先安排了高优先级的任务 t_001，并根据循环规则设定了 t_002 的范围。",\n'
+        '  "reasoning": "优先安排了更紧急的任务，并尽量参考了备注里的频率偏好。",\n'
         '  "schedule": {\n'
         '    "assignments": [\n'
-        '      { "taskId": "t_001", "date": "2025-12-29" }\n'
+        '      { "taskId": "t_001", "date": "2026-02-06" },\n'
+        '      { "taskId": "t_002", "dates": ["2026-02-07", "2026-02-09", "2026-02-11"] }\n'
         '    ]\n'
         '  }\n'
         '}';
@@ -499,12 +510,10 @@ class MonthAiScheduler {
           '只能使用 taskPool 中存在的 taskId',
           'date 格式必须为 YYYY-MM-DD',
           'date 必须在 range.start 与 range.end（含）之间',
-          '如果 taskPool[i].repeat != none，则请输出 start/end（同一个 taskId 只出现一次），不要逐日输出',
           '只输出 JSON，不要输出任何额外文字、不要用 Markdown/代码块',
         ],
         'strategy_hint': [
           '尽量把任务分散到不同日期，避免全部堆在同一天',
-          '循环任务（repeat != none）优先保证范围覆盖（建议 start=range.start, end=range.end），再考虑把其他非循环任务分散安排',
           '可以优先把更紧急/更重要（从标题语义判断）的任务安排在更靠近 start 的日期',
           '若任务本身已经有 dueDate/remindAt/description 等信息，请参考这些信息进行安排；但不要修改这些字段，只输出分配结果',
         ],
@@ -519,7 +528,7 @@ class MonthAiScheduler {
         'schedule': {
           'assignments': [
             {'taskId': '<string>', 'date': 'YYYY-MM-DD'},
-            {'taskId': '<string>', 'start': 'YYYY-MM-DD', 'end': 'YYYY-MM-DD'}
+            {'taskId': '<string>', 'dates': ['YYYY-MM-DD']}
           ]
         }
       },
@@ -536,145 +545,159 @@ class MonthAiScheduler {
     _logLong('MonthAiScheduler', 'Request range=${_dateKey(today)}..${_dateKey(monthEnd)} tasks=${taskItems.length}');
     _logLong('MonthAiScheduler', 'Request userPrompt=$userPrompt');
 
-    final resp = await aiService.chat(
-      messages: [
-        OpenAIChatMessage.text(role: OpenAIMessageRole.user, content: userPrompt),
-      ],
-      systemPrompt: systemPrompt,
-      tools: null,
-    );
-
-    final msg = resp.choices.isNotEmpty ? resp.choices.first.message : null;
-    final msgJson = msg == null ? {} : msg.toJson();
-    _logLong('MonthAiScheduler', 'AI message.toJson=${jsonEncode(msgJson)}');
-
-    final contentText = msg?.textContent ?? '';
-    _logLong('MonthAiScheduler', 'AI raw textContent=$contentText');
-
-    final jsonStr = _extractJsonObject(contentText);
-    _logLong('MonthAiScheduler', 'AI extracted json=$jsonStr');
-    final decoded = jsonDecode(jsonStr);
-    if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
-    
-    // 兼容旧格式（直接返回 assignments）或新格式（返回 reasoning + schedule）
-    List<dynamic> listRaw;
-    String reasoning = '';
-    
-    if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
-        listRaw = decoded['schedule']['assignments'] ?? [];
-        reasoning = decoded['reasoning']?.toString() ?? '';
-    } else if (decoded.containsKey('assignments')) {
-        listRaw = decoded['assignments'];
-        reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
-    } else {
-        throw Exception('AI 输出缺少 schedule.assignments 或 assignments');
+    int maxJsonParseRetries = 3;
+    try {
+      maxJsonParseRetries = AIConfigRepository().getConfig()?.maxJsonParseRetries ?? 3;
+    } catch (_) {
+      maxJsonParseRetries = 3;
     }
 
-    final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
-    final start = DateTime(today.year, today.month, today.day);
-    final end = DateTime(monthEnd.year, monthEnd.month, monthEnd.day);
-
-    String? repeatForTaskId(String taskId) {
-      final item = taskItems.cast<Map>().firstWhere(
-        (e) => e['id']?.toString() == taskId,
-        orElse: () => const {},
-      );
-      final r = item['repeat']?.toString();
-      return r;
+    String clip(String s, int maxChars) {
+      if (s.length <= maxChars) return s;
+      return s.substring(0, maxChars);
     }
 
-    List<DateTime> expandRepeatDates({
-      required DateTime rangeStart,
-      required DateTime rangeEnd,
-      required String repeat,
+    String buildRetryPrompt({
+      required int attempt,
+      required String error,
+      required String lastRawOutput,
     }) {
-      final rs = DateTime(rangeStart.year, rangeStart.month, rangeStart.day);
-      final re = DateTime(rangeEnd.year, rangeEnd.month, rangeEnd.day);
-      if (re.isBefore(rs)) return const [];
-
-      bool keep(DateTime d) {
-        switch (repeat) {
-          case 'daily':
-            return true;
-          case 'workdays':
-            return d.weekday >= DateTime.monday && d.weekday <= DateTime.friday;
-          case 'weekends':
-            return d.weekday == DateTime.saturday || d.weekday == DateTime.sunday;
-          default:
-            return true;
-        }
-      }
-
-      final dates = <DateTime>[];
-
-      if (repeat == 'weekly') {
-        final anchorWeekday = rs.weekday;
-        for (DateTime d = rs; !d.isAfter(re); d = d.add(const Duration(days: 1))) {
-          if (d.weekday == anchorWeekday) dates.add(d);
-        }
-        if (dates.isEmpty) dates.add(rs);
-        return dates;
-      }
-
-      if (repeat == 'monthly') {
-        return [rs];
-      }
-
-      for (DateTime d = rs; !d.isAfter(re); d = d.add(const Duration(days: 1))) {
-        if (keep(d)) dates.add(d);
-      }
-      return dates;
+      return jsonEncode({
+        'instruction': {
+          'goal': '请修复上一次输出的格式错误，并重新输出符合要求的纯 JSON。',
+          'attempt': attempt,
+          'previous_error': error,
+          'must_follow': [
+            '只输出纯 JSON（不要 Markdown/代码块/解释）',
+            '严格匹配 output_schema',
+            '只能使用 taskPool 中存在的 taskId',
+            '所有日期必须在 range.start 与 range.end（含）之间，格式为 YYYY-MM-DD',
+          ],
+        },
+        'range': {
+          'start': _dateKey(today),
+          'end': _dateKey(monthEnd),
+        },
+        'taskPool': taskItems,
+        'output_schema': {
+          'reasoning': '<string>',
+          'schedule': {
+            'assignments': [
+              {'taskId': '<string>', 'date': 'YYYY-MM-DD'},
+              {'taskId': '<string>', 'dates': ['YYYY-MM-DD']}
+            ]
+          }
+        },
+        'previous_output': clip(lastRawOutput, 1400),
+      });
     }
 
-    final result = <_TaskAssignment>[];
-    for (final item in listRaw) {
-      if (item is! Map) continue;
-      final taskId = item['taskId']?.toString();
-      final dateStr = item['date']?.toString();
-      final startStr = item['start']?.toString();
-      final endStr = item['end']?.toString();
-      if (taskId == null) continue;
-      if (!allowedIds.contains(taskId)) continue;
+    Exception? lastError;
+    String lastRawText = '';
 
-      // 非循环任务：单日
-      if (dateStr != null) {
-        final parsed = DateTime.tryParse(dateStr);
-        if (parsed == null) continue;
-        final day = DateTime(parsed.year, parsed.month, parsed.day);
-        if (day.isBefore(start) || day.isAfter(end)) continue;
-        result.add(_TaskAssignment(taskId: taskId, date: day));
-        continue;
-      }
+    for (int attempt = 1; attempt <= maxJsonParseRetries; attempt++) {
+      final content = attempt == 1 ? userPrompt : buildRetryPrompt(attempt: attempt, error: lastError.toString(), lastRawOutput: lastRawText);
+      _logLong('MonthAiScheduler', 'AI request attempt=$attempt max=$maxJsonParseRetries');
 
-      // 循环任务：范围（客户端按 repeat 规则展开）
-      if (startStr != null && endStr != null) {
-        final ps = DateTime.tryParse(startStr);
-        final pe = DateTime.tryParse(endStr);
-        if (ps == null || pe == null) continue;
-        final rs = DateTime(ps.year, ps.month, ps.day);
-        final re = DateTime(pe.year, pe.month, pe.day);
+      try {
+        final resp = await aiService.chat(
+          messages: [
+            OpenAIChatMessage.text(role: OpenAIMessageRole.user, content: content),
+          ],
+          systemPrompt: systemPrompt,
+          tools: null,
+        );
 
-        // clamp to request range
-        final clampedStart = rs.isBefore(start) ? start : rs;
-        final clampedEnd = re.isAfter(end) ? end : re;
+        final msg = resp.choices.isNotEmpty ? resp.choices.first.message : null;
+        final msgJson = msg == null ? {} : msg.toJson();
+        _logLong('MonthAiScheduler', 'AI message.toJson=${jsonEncode(msgJson)}');
 
-        final repeat = repeatForTaskId(taskId) ?? 'none';
-        final isRecurring = repeat.trim().isNotEmpty && repeat.trim() != 'none';
-        if (!isRecurring) {
-          // 兜底：若 AI 给了范围但任务不是循环任务，则取范围起点
-          result.add(_TaskAssignment(taskId: taskId, date: clampedStart));
-          continue;
+        final contentText = msg?.textContent ?? '';
+        lastRawText = contentText;
+        _logLong('MonthAiScheduler', 'AI raw textContent=$contentText');
+
+        final jsonStr = _extractJsonObject(contentText);
+        _logLong('MonthAiScheduler', 'AI extracted json=$jsonStr');
+        final decoded = jsonDecode(jsonStr);
+        if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
+
+        List<dynamic> listRaw;
+        String reasoning = '';
+
+        if (decoded.containsKey('schedule') && decoded['schedule'] is Map) {
+          final schedule = decoded['schedule'];
+          final raw = (schedule as Map)['assignments'];
+          if (raw is! List) {
+            throw Exception('AI 输出 schedule.assignments 不是数组');
+          }
+          listRaw = raw;
+          reasoning = decoded['reasoning']?.toString() ?? '';
+        } else if (decoded.containsKey('assignments')) {
+          final raw = decoded['assignments'];
+          if (raw is! List) {
+            throw Exception('AI 输出 assignments 不是数组');
+          }
+          listRaw = raw;
+          reasoning = decoded['reasoning']?.toString() ?? '无逻辑说明';
+        } else {
+          throw Exception('AI 输出缺少 schedule.assignments 或 assignments');
         }
 
-        final expanded = expandRepeatDates(rangeStart: clampedStart, rangeEnd: clampedEnd, repeat: repeat);
-        for (final d in expanded) {
-          if (d.isBefore(start) || d.isAfter(end)) continue;
-          result.add(_TaskAssignment(taskId: taskId, date: d));
+        final allowedIds = taskItems.map((e) => e['id'].toString()).toSet();
+        final start = DateTime(today.year, today.month, today.day);
+        final end = DateTime(monthEnd.year, monthEnd.month, monthEnd.day);
+
+        final result = <_TaskAssignment>[];
+        final seen = <String>{};
+
+        for (final item in listRaw) {
+          if (item is! Map) continue;
+          final taskId = item['taskId']?.toString();
+          final dateStr = item['date']?.toString();
+          final datesRaw = item['dates'];
+          if (taskId == null) continue;
+          if (!allowedIds.contains(taskId)) continue;
+
+          void addDay(DateTime day) {
+            final k = '$taskId|${_dateKey(day)}';
+            if (seen.add(k)) {
+              result.add(_TaskAssignment(taskId: taskId, date: day));
+            }
+          }
+
+          if (dateStr != null) {
+            final parsed = DateTime.tryParse(dateStr);
+            if (parsed == null) continue;
+            final day = DateTime(parsed.year, parsed.month, parsed.day);
+            if (day.isBefore(start) || day.isAfter(end)) continue;
+            addDay(day);
+            continue;
+          }
+
+          if (datesRaw is List) {
+            for (final d0 in datesRaw) {
+              final s = d0?.toString();
+              if (s == null) continue;
+              final parsed = DateTime.tryParse(s);
+              if (parsed == null) continue;
+              final day = DateTime(parsed.year, parsed.month, parsed.day);
+              if (day.isBefore(start) || day.isAfter(end)) continue;
+              addDay(day);
+            }
+          }
+        }
+
+        return (reasoning: reasoning, assignments: result);
+      } catch (e) {
+        lastError = e is Exception ? e : Exception(e.toString());
+        _logLong('MonthAiScheduler', 'AI parse attempt=$attempt failed error=$e');
+        if (attempt >= maxJsonParseRetries) {
+          break;
         }
       }
     }
 
-    return (reasoning: reasoning, assignments: result);
+    throw Exception('AI 输出解析失败（已重试 $maxJsonParseRetries 次）：${lastError ?? '未知错误'}');
   }
 
   static String _extractJsonObject(String s) {

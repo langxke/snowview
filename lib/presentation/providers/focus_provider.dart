@@ -267,6 +267,17 @@ class FocusProvider extends ChangeNotifier {
     await _loadRecentSessions();
   }
 
+  Future<void> resetAfterDataCleared() async {
+    _stopTimer();
+    _currentSession = null;
+    _elapsedSeconds = 0;
+    _isPaused = false;
+    _backgroundTime = null;
+    _todayStats = null;
+    _recentSessions = [];
+    notifyListeners();
+  }
+
   // === 内部方法 ===
 
   /// 启动计时器

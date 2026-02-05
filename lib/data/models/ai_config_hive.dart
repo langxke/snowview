@@ -46,6 +46,10 @@ class AIConfigHive extends HiveObject {
   @HiveField(9, defaultValue: 'action')
   String aiMode;
 
+  /// AI输出解析错误的最大重试次数（用于 JSON/schema 解析失败的重试）
+  @HiveField(10, defaultValue: 3)
+  int maxJsonParseRetries;
+
   AIConfigHive({
     required this.provider,
     required this.apiKey,
@@ -57,6 +61,7 @@ class AIConfigHive extends HiveObject {
     required this.createdAt,
     required this.updatedAt,
     this.aiMode = 'action', // 默认行动模式
+    this.maxJsonParseRetries = 3,
   });
 
   /// 创建默认配置
@@ -73,6 +78,7 @@ class AIConfigHive extends HiveObject {
       createdAt: now,
       updatedAt: now,
       aiMode: 'action', // 默认行动模式
+      maxJsonParseRetries: 3,
     );
   }
 
@@ -112,6 +118,7 @@ class AIConfigHive extends HiveObject {
     DateTime? createdAt,
     DateTime? updatedAt,
     String? aiMode,
+    int? maxJsonParseRetries,
   }) {
     return AIConfigHive(
       provider: provider ?? this.provider,
@@ -124,12 +131,13 @@ class AIConfigHive extends HiveObject {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       aiMode: aiMode ?? this.aiMode,
+      maxJsonParseRetries: maxJsonParseRetries ?? this.maxJsonParseRetries,
     );
   }
 
   @override
   String toString() {
-    return 'AIConfigHive{provider: $provider, model: $model, enableTools: $enableTools, aiMode: $aiMode}';
+    return 'AIConfigHive{provider: $provider, model: $model, enableTools: $enableTools, aiMode: $aiMode, maxJsonParseRetries: $maxJsonParseRetries}';
   }
 
   @override

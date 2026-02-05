@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'models.dart';
 
 class EventPill extends StatelessWidget {
@@ -12,7 +13,7 @@ class EventPill extends StatelessWidget {
 		return Container(
 			width: double.infinity,
 			margin: const EdgeInsets.only(bottom: 4),
-			padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+			padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
 			decoration: BoxDecoration(
 				color: color.withOpacity(0.2),
 				borderRadius: BorderRadius.circular(999),
@@ -33,7 +34,12 @@ class EventPill extends StatelessWidget {
 
 class EventList extends StatelessWidget {
 	final List<CalendarEvent> events;
-	const EventList({super.key, required this.events});
+	final Future<void> Function(CalendarEvent event, Offset globalPosition)? onSecondaryTapEvent;
+	const EventList({
+		super.key,
+		required this.events,
+		this.onSecondaryTapEvent,
+	});
 
 	@override
 	Widget build(BuildContext context) {
@@ -43,8 +49,8 @@ class EventList extends StatelessWidget {
 			builder: (context, constraints) {
 				// 较精确估算：基于当前字体，减少保守余量，让更多条目可显示
 				final double fontSize = Theme.of(context).textTheme.bodySmall?.fontSize ?? 12.0;
-				final double pillHeight = fontSize + 10.0; // 约 = 文本高度 + 内边距与margin
-				final double overflowLabelHeight = fontSize + 4.0;
+				final double pillHeight = fontSize + 14.0;
+				final double overflowLabelHeight = fontSize + 6.0;
 				const double safety = 2.0; // 更小的安全余量
 				double available = (constraints.maxHeight - safety).clamp(0.0, double.infinity);
 				// 初步估算最多可显示条数（不考虑"其他n个"）
@@ -60,7 +66,17 @@ class EventList extends StatelessWidget {
 					mainAxisSize: MainAxisSize.min,
 					crossAxisAlignment: CrossAxisAlignment.start,
 					children: [
-						for (final e in list) EventPill(title: e.title, color: e.color),
+						for (final e in list)
+							Listener(
+								behavior: HitTestBehavior.opaque,
+								onPointerDown: (ev) {
+									if (onSecondaryTapEvent == null) return;
+									if (ev.kind != PointerDeviceKind.mouse) return;
+									if (ev.buttons != kSecondaryMouseButton) return;
+									onSecondaryTapEvent!(e, ev.position);
+								},
+								child: EventPill(title: e.title, color: e.color),
+							),
 						if (overflow > 0)
 							Text('其他$overflow个', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
 					],
@@ -173,7 +189,11 @@ class DayCell extends StatelessWidget {
 	final bool inCurrentMonth;
 	final bool isSelected;
 	final List<CalendarEvent> events;
-	final List<String> todos;
+	final List<MonthPlanItem> todos;
+	final Function(DateTime start, DateTime end)? onAddEvent;
+	final Function(CalendarEvent event)? onDeleteEvent;
+	final Future<void> Function(DateTime date, MonthPlanItem item)? onRemovePlanItem;
+	final Future<void> Function(DateTime date, MonthPlanItemType type, String title)? onCreatePlanTask;
 	const DayCell({
 		super.key,
 		required this.index,
@@ -184,6 +204,10 @@ class DayCell extends StatelessWidget {
 		this.isSelected = false,
 		this.events = const [],
 		this.todos = const [],
+		this.onAddEvent,
+		this.onDeleteEvent,
+		this.onRemovePlanItem,
+		this.onCreatePlanTask,
 	});
 
 	@override
@@ -202,6 +226,163 @@ class DayCell extends StatelessWidget {
 		final BorderSide line = BorderSide(color: gridColor, width: 1);
 		// overflow 将在 EventList 内部动态计算，这里无需预估
 
+		Future<void> showDeleteMenu(CalendarEvent event, Offset globalPosition) async {
+			if (onDeleteEvent == null) return;
+			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+			final selected = await showMenu<bool>(
+				context: context,
+				position: RelativeRect.fromLTRB(
+					globalPosition.dx,
+					globalPosition.dy,
+					overlay.size.width - globalPosition.dx,
+					overlay.size.height - globalPosition.dy,
+				),
+				items: const [
+					PopupMenuItem<bool>(
+						value: true,
+						child: Row(
+							children: [
+								Icon(Icons.delete_outline, size: 18, color: Colors.red),
+								SizedBox(width: 8),
+								Text('删除', style: TextStyle(color: Colors.red)),
+							],
+						),
+					),
+				],
+			);
+			if (selected == true) {
+				final result = onDeleteEvent!(event);
+				if (result is Future) {
+					await result;
+				}
+			}
+		}
+
+		Widget eventPillWithMenu(CalendarEvent e, Color color) {
+			return Listener(
+				behavior: HitTestBehavior.opaque,
+				onPointerDown: (ev) {
+					if (onDeleteEvent == null) return;
+					if (ev.kind != PointerDeviceKind.mouse) return;
+					if (ev.buttons != kSecondaryMouseButton) return;
+					showDeleteMenu(e, ev.position);
+				},
+				child: EventPill(title: e.title, color: color),
+			);
+		}
+
+		Future<void> showRemovePlanItemMenu(MonthPlanItem item, Offset globalPosition) async {
+			if (onRemovePlanItem == null) return;
+			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+			final selected = await showMenu<bool>(
+				context: context,
+				position: RelativeRect.fromLTRB(
+					globalPosition.dx,
+					globalPosition.dy,
+					overlay.size.width - globalPosition.dx,
+					overlay.size.height - globalPosition.dy,
+				),
+				items: const [
+					PopupMenuItem<bool>(
+						value: true,
+						child: Row(
+							children: [
+								Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
+								SizedBox(width: 8),
+								Text('从当天移除', style: TextStyle(color: Colors.red)),
+							],
+						),
+					),
+				],
+			);
+			if (selected == true) {
+				await onRemovePlanItem!(date, item);
+			}
+		}
+
+		Future<String?> promptTitle() async {
+			final controller = TextEditingController();
+			final result = await showDialog<String>(
+				context: context,
+				builder: (context) {
+					return AlertDialog(
+						title: const Text('新增任务'),
+						content: TextField(
+							controller: controller,
+							autofocus: true,
+							decoration: const InputDecoration(hintText: '输入任务标题'),
+							onSubmitted: (_) => Navigator.of(context).pop(controller.text),
+						),
+						actions: [
+							TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('取消')),
+							FilledButton(onPressed: () => Navigator.of(context).pop(controller.text), child: const Text('添加')),
+						],
+					);
+				},
+			);
+			return result?.trim();
+		}
+
+		Future<void> showCellMenu(Offset globalPosition) async {
+			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+			final selected = await showMenu<_MonthCellAction>(
+				context: context,
+				position: RelativeRect.fromLTRB(
+					globalPosition.dx,
+					globalPosition.dy,
+					overlay.size.width - globalPosition.dx,
+					overlay.size.height - globalPosition.dy,
+				),
+				items: const [
+					PopupMenuItem<_MonthCellAction>(
+						value: _MonthCellAction.addTodoTask,
+						child: Row(
+							children: [
+								Icon(Icons.playlist_add, size: 18),
+								SizedBox(width: 8),
+								Text('新增待办'),
+							],
+						),
+					),
+					PopupMenuItem<_MonthCellAction>(
+						value: _MonthCellAction.addAllDayTask,
+						child: Row(
+							children: [
+								Icon(Icons.task_alt, size: 18),
+								SizedBox(width: 8),
+								Text('新增全天任务'),
+							],
+						),
+					),
+					PopupMenuDivider(),
+					PopupMenuItem<_MonthCellAction>(
+						value: _MonthCellAction.addEvent,
+						child: Row(
+							children: [
+								Icon(Icons.event_available, size: 18),
+								SizedBox(width: 8),
+								Text('新增日程'),
+							],
+						),
+					),
+				],
+			);
+
+			if (selected == null) return;
+			if (selected == _MonthCellAction.addEvent) {
+				if (onAddEvent != null) {
+					onAddEvent!(date, date);
+				}
+				return;
+			}
+
+			if (onCreatePlanTask == null) return;
+			final title = await promptTitle();
+			if (title == null || title.isEmpty) return;
+			final type = selected == _MonthCellAction.addAllDayTask ? MonthPlanItemType.allDayTask : MonthPlanItemType.todoTask;
+			await onCreatePlanTask!(date, type, title);
+		}
+
 		return Container(
 			decoration: BoxDecoration(
 				color: isSelected ? Colors.lightBlue.withOpacity(0.15) : Colors.transparent,
@@ -213,35 +394,69 @@ class DayCell extends StatelessWidget {
 				),
 			),
 			padding: const EdgeInsets.all(8),
-			child: Column(
-				crossAxisAlignment: CrossAxisAlignment.start,
+			child: Stack(
 				children: [
-					Row(
+					Positioned.fill(
+						child: Listener(
+							behavior: HitTestBehavior.translucent,
+							onPointerDown: (ev) {
+								if (ev.kind != PointerDeviceKind.mouse) return;
+								if (ev.buttons != kSecondaryMouseButton) return;
+								showCellMenu(ev.position);
+							},
+							child: const SizedBox.expand(),
+						),
+					),
+					Column(
+						crossAxisAlignment: CrossAxisAlignment.start,
 						children: [
-							const Spacer(),
-							Text('${date.day}', style: TextStyle(fontWeight: FontWeight.w600, color: textColor)),
-							// 可扩展：显示当日任务计数徽标
+							Row(
+								children: [
+									const Spacer(),
+									Text('${date.day}', style: TextStyle(fontWeight: FontWeight.w600, color: textColor)),
+									// 可扩展：显示当日任务计数徽标
+								],
+							),
+							const SizedBox(height: 6),
+							if (allDayTasks.isNotEmpty) ...[
+								...allDayTasks.take(2).map((e) => eventPillWithMenu(e, theme.colorScheme.primary)),
+								if (allDayTasks.length > 2)
+									Text('任务+${allDayTasks.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+								const SizedBox(height: 4),
+							],
+							if (todos.isNotEmpty) ...[
+								...todos.take(2).map((t) {
+									final pillColor = t.type == MonthPlanItemType.allDayTask ? theme.colorScheme.primary : theme.colorScheme.secondary;
+									return Listener(
+										behavior: HitTestBehavior.opaque,
+										onPointerDown: (ev) {
+											if (onRemovePlanItem == null) return;
+											if (ev.kind != PointerDeviceKind.mouse) return;
+											if (ev.buttons != kSecondaryMouseButton) return;
+											showRemovePlanItemMenu(t, ev.position);
+										},
+										child: EventPill(title: t.title, color: pillColor),
+									);
+								}),
+								if (todos.length > 2)
+									Text('待办+${todos.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+								const SizedBox(height: 4),
+							],
+							Expanded(
+								child: EventList(
+									events: timedEvents,
+									onSecondaryTapEvent: onDeleteEvent == null ? null : showDeleteMenu,
+								),
+							),
 						],
 					),
-					const SizedBox(height: 6),
-					if (allDayTasks.isNotEmpty) ...[
-						...allDayTasks.take(2).map((e) => EventPill(title: e.title, color: theme.colorScheme.primary)),
-						if (allDayTasks.length > 2)
-							Text('任务+${allDayTasks.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
-						const SizedBox(height: 4),
-					],
-					if (todos.isNotEmpty) ...[
-						...todos.take(2).map((t) => EventPill(title: t, color: theme.colorScheme.secondary)),
-						if (todos.length > 2)
-							Text('待办+${todos.length - 2}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
-						const SizedBox(height: 4),
-					],
-					Expanded(child: EventList(events: timedEvents)),
 				],
 			),
 		);
 	}
 }
+
+enum _MonthCellAction { addTodoTask, addAllDayTask, addEvent }
 
 class AddEventDialog extends StatefulWidget {
 	final DateTime startDate;
@@ -323,7 +538,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
 												const Text('开始时间', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
 												const SizedBox(height: 4),
 												DropdownButtonFormField<TimeOfDay>(
-													value: startTime,
+													initialValue: startTime,
 													decoration: const InputDecoration(
 														border: OutlineInputBorder(),
 														contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -373,7 +588,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
 												const Text('结束时间', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
 												const SizedBox(height: 4),
 												DropdownButtonFormField<TimeOfDay>(
-													value: endTime,
+													initialValue: endTime,
 													decoration: const InputDecoration(
 														border: OutlineInputBorder(),
 														contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),

@@ -144,14 +144,21 @@ class _TaskItemState extends State<TaskItem> {
   Future<void> _saveTaskMeta() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        '$_taskMetaPrefsPrefix${widget.task.id}',
-        jsonEncode({
-          'estimatedMinutes': _estimatedMinutes,
-          'priority': _priority,
-          'repeat': _repeatRule,
-        }),
-      );
+      final key = '$_taskMetaPrefsPrefix${widget.task.id}';
+      final raw = prefs.getString(key);
+      Map<String, dynamic> decoded = {};
+      if (raw != null && raw.trim().isNotEmpty) {
+        try {
+          final d = jsonDecode(raw);
+          if (d is Map) {
+            decoded = Map<String, dynamic>.from(d);
+          }
+        } catch (_) {}
+      }
+      decoded['estimatedMinutes'] = _estimatedMinutes;
+      decoded['priority'] = _priority;
+      decoded['repeat'] = _repeatRule;
+      await prefs.setString(key, jsonEncode(decoded));
     } catch (_) {
       // ignore
     }

@@ -217,6 +217,22 @@ class TaskListProvider extends ChangeNotifier {
     _tasks = _repository.getAllTasks();
     notifyListeners();
   }
+
+  Future<String?> createTaskReturningId({required String title}) async {
+    final t = title.trim();
+    if (t.isEmpty) return null;
+    final task = ChecklistTaskHive(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: t,
+      isCompleted: false,
+      createdAt: DateTime.now(),
+      order: _tasks.length,
+    );
+    await _repository.saveTask(task);
+    _tasks = _repository.getAllTasks();
+    notifyListeners();
+    return task.id;
+  }
   
   /// 更新任务
   Future<void> updateTask({

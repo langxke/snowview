@@ -4,6 +4,16 @@ class DateUtilsEx {
     return '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
   }
 
+  static DateTime floorToMinute(DateTime d) {
+    return DateTime(d.year, d.month, d.day, d.hour, d.minute);
+  }
+
+  static DateTime ceilToMinute(DateTime d) {
+    final floored = floorToMinute(d);
+    if (d.isAtSameMomentAs(floored)) return d;
+    return floored.add(const Duration(minutes: 1));
+  }
+
   // 判断闰年
   static bool isLeapYear(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
