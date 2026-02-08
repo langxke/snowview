@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../data/models/calendar_event_hive.dart';
 import '../providers/schedule_provider.dart';
 import '../providers/task_list_provider.dart';
 import '../providers/daily_plan_provider.dart';
+import '../providers/pending_time_block_provider.dart';
 import '../../services/notification_service.dart';
 import '../screens/schedule/models.dart';
 
@@ -41,6 +43,18 @@ class ScheduleMonitorContent extends StatefulWidget {
   State<ScheduleMonitorContent> createState() => ScheduleMonitorContentState();
 }
 
+class _PendingDialogInfo {
+  final DateTime showTime;
+  final CalendarEvent event;
+  final String? taskId;
+
+  const _PendingDialogInfo({
+    required this.showTime,
+    required this.event,
+    required this.taskId,
+  });
+}
+
 class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
   Timer? _monitorTimer;
   // 记录最近一次已处理的“结束时间”，防止同一事件在1分钟内重复触发
@@ -48,8 +62,9 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
   final Map<String, DateTime> _handledEvents = {};
 
   // 记录弹窗的显示时间，用于超时判定
-  // Key: taskId, Value: showTime
-  final Map<String, DateTime> _pendingDialogs = {};
+  // Key: overlayKey(eventId), Value: pending info
+  final Map<String, _PendingDialogInfo> _pendingDialogs = {};
+  final Set<String> _timeoutHandledKeys = {};
 
   bool _hasPerformedInitialCleanup = false;
 
@@ -59,7 +74,6 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     // 每30秒检查一次
     _monitorTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       _checkScheduleEnd();
-      _checkDialogTimeout(); // 检查是否有超时未处理的弹窗
     });
     
     // 监听 Provider 数据变化，确保在数据加载后执行清理
@@ -97,32 +111,10 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     await _cleanupPastTasks();
   }
 
-  /// 检查是否有超时未处理的任务（超过15分钟未确认）
-  void _checkDialogTimeout() async {
+  Future<void> _handleOverlayTimeout(String overlayKey, String? taskId, TaskListProvider taskProvider) async {
     if (!mounted) return;
-    final taskProvider = context.read<TaskListProvider>();
-    final now = DateTime.now();
-    final timeout = const Duration(minutes: 15);
-
-    final expiredTaskIds = <String>[];
-    
-    _pendingDialogs.forEach((taskId, showTime) {
-      if (now.difference(showTime) > timeout) {
-        expiredTaskIds.add(taskId);
-      }
-    });
-
-    for (final taskId in expiredTaskIds) {
-      // 视为未完成，执行重置逻辑
-      debugPrint('Task confirmation timed out: $taskId');
-      _pendingDialogs.remove(taskId);
-      
-      // 关闭 Overlay
-      if (_activeOverlays.containsKey(taskId)) {
-        _activeOverlays[taskId]?.remove();
-        _activeOverlays.remove(taskId);
-      }
-      
+    _removeOverlay(overlayKey);
+    if (taskId != null) {
       await _resetIncompleteTask(taskProvider, taskId);
     }
   }
@@ -239,16 +231,6 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     return totalCleaned;
   }
 
-  /// 调试方法：手动触发清理逻辑
-  Future<void> debugTriggerCleanup() async {
-    final count = await _cleanupPastTasks();
-    if (mounted) {
-       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('手动清理检查完成，共清理 $count 个任务')),
-      );
-    }
-  }
-
   /// 重置未完成任务：如果是普通任务，清除截止日期；如果是循环任务，也清除截止日期（因为月视图中已预先安排好）
   Future<void> _resetIncompleteTask(TaskListProvider taskProvider, String taskId) async {
     // 无论是否循环，过期未完成的任务都重置为“未安排”（清除 dueDate）
@@ -261,35 +243,6 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
       clearDueDate: true,
     );
     debugPrint('Reset incomplete task to unscheduled: $taskId');
-
-    if (!mounted) return;
-
-    // 同时删除关联的日历时间块（仅针对本次结束的事件）
-    // 注意：这里的 taskId 只是任务ID，我们需要找到关联的事件ID才能删除
-    // 但 _resetIncompleteTask 参数里只有 taskId。
-    // 我们需要扩展此方法或在调用处处理。
-    // 为了方便，我们在调用处（_triggerCompletionFlow）里直接处理删除逻辑。
-    // 对于 _cleanupPastTasks 和 _checkDialogTimeout，由于它们是在“事后”处理，
-    // 也可以尝试扫描关联的 CalendarEvents 并删除。
-    
-    final scheduleProvider = context.read<ScheduleProvider>();
-    final db = scheduleProvider.databaseService;
-    final allEvents = db.getAllEvents();
-    
-    // 查找所有关联此 taskId 且已结束的事件并删除
-    // (防止日历上留着一堆红色的未完成块)
-    final now = DateTime.now();
-    for (final event in allEvents) {
-      // 只删除过去的事件
-      if (event.end.isBefore(now)) {
-          final eTaskId = _extractTaskId(event.description);
-          if (eTaskId == taskId) {
-             await db.deleteEvent(event.id);
-             debugPrint('Deleted expired event for task: $taskId');
-          }
-      }
-    }
-    scheduleProvider.refresh();
   }
 
   // 记录弹窗的 OverlayEntry，用于关闭
@@ -303,20 +256,41 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     for (final entry in _activeOverlays.values) {
       entry.remove();
     }
+    if (mounted) {
+      final pendingProvider = context.read<PendingTimeBlockProvider>();
+      for (final key in _activeOverlays.keys) {
+        pendingProvider.clearPending(key);
+      }
+    }
     _activeOverlays.clear();
     super.dispose();
   }
 
-  void _checkScheduleEnd() {
+  void _checkScheduleEnd() async {
     if (!mounted) return;
     final scheduleProvider = context.read<ScheduleProvider>();
+    final dailyPlanProvider = context.read<DailyPlanProvider>();
     final taskProvider = context.read<TaskListProvider>();
     final now = DateTime.now();
 
-    // 获取今日事件
-    final events = scheduleProvider.getEventsForDate(now);
+    final merged = <String, CalendarEvent>{};
+
+    // 1) legacy calendar_events box
+    for (final e in scheduleProvider.getEventsForDate(now)) {
+      merged[e.id] = e;
+    }
+
+    // 2) DailyPlan embedded scheduledEvents (UI 的真实数据源)
+    try {
+      final plan = await dailyPlanProvider.getPlanForDate(now);
+      for (final e in plan.scheduledEvents) {
+        final ce = e.toCalendarEvent();
+        merged[ce.id] = ce;
+      }
+    } catch (_) {}
+
     // 过滤掉全天事件
-    final blocks = events.where((e) => !e.allDay).toList();
+    final blocks = merged.values.where((e) => !e.allDay).toList();
 
     for (final e in blocks) {
       // 1. 检查是否刚刚结束
@@ -340,7 +314,7 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
         _handledEvents[e.id] = end;
 
         // 触发流程
-        _triggerCompletionFlow(e, taskProvider);
+        await _triggerCompletionFlow(e, taskProvider);
       }
     }
     
@@ -353,12 +327,6 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     // 但为了避免 IDE 警告（或未定义的 nullability），直接使用
     final taskId = _extractTaskId(event.description);
 
-    // 0. 如果关联了任务且已完成，则不触发任何提醒
-    if (taskId != null) {
-      final task = taskProvider.getTaskById(taskId);
-      if (task != null && task.isCompleted) return;
-    }
-    
     // 1. 发送系统通知
     await NotificationService().showImmediate(
       id: event.id.hashCode,
@@ -369,41 +337,48 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     // 2. 右下角 Overlay 提醒
     if (!mounted) return;
     
-    if (taskId != null) {
-      // 检查任务是否已完成
-      final task = taskProvider.getTaskById(taskId);
-      if (task == null || task.isCompleted) return; // 任务不存在或已完成，不弹窗
+    final overlayKey = event.id;
 
-      // 如果该任务已经有 Overlay 在显示，先移除旧的（避免堆叠重复）
-      if (_activeOverlays.containsKey(taskId)) {
-        _activeOverlays[taskId]?.remove();
-        _activeOverlays.remove(taskId);
-      }
-      
-      // 记录显示时间
-      _pendingDialogs[taskId] = DateTime.now();
-      
-      // 创建新的 Overlay
-      final overlayEntry = _createOverlayEntry(context, event, taskId, taskProvider);
-      
-      // 插入 Overlay
-      // 使用 navigatorKey 获取全局 Overlay，或者回退到 context
-      final overlayState = widget.navigatorKey?.currentState?.overlay ?? Overlay.of(context);
-      overlayState.insert(overlayEntry);
-      _activeOverlays[taskId] = overlayEntry;
+    _timeoutHandledKeys.remove(overlayKey);
+    _removeOverlay(overlayKey);
+
+    _pendingDialogs[overlayKey] = _PendingDialogInfo(
+      showTime: DateTime.now(),
+      event: event,
+      taskId: taskId,
+    );
+
+    final stackIndex = _activeOverlays.length;
+    final overlayEntry = _createOverlayEntry(context, event, overlayKey, taskId, taskProvider, stackIndex);
+
+    final overlayState = widget.navigatorKey?.currentState?.overlay;
+    if (overlayState == null) {
+      final messenger = widget.navigatorKey?.currentContext != null
+          ? ScaffoldMessenger.of(widget.navigatorKey!.currentContext!)
+          : (context.mounted ? ScaffoldMessenger.of(context) : null);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('无法显示确认框：Overlay 不可用')),
+      );
+      _pendingDialogs.remove(overlayKey);
+      return;
     }
+    context.read<PendingTimeBlockProvider>().markPending(overlayKey);
+    overlayState.insert(overlayEntry);
+    _activeOverlays[overlayKey] = overlayEntry;
   }
 
   OverlayEntry _createOverlayEntry(
     BuildContext context, 
     CalendarEvent event, 
-    String taskId, 
-    TaskListProvider taskProvider
+    String overlayKey,
+    String? taskId,
+    TaskListProvider taskProvider,
+    int stackIndex,
   ) {
     return OverlayEntry(
       builder: (context) => Positioned(
         right: 20,
-        bottom: 20 + (_activeOverlays.keys.toList().indexOf(taskId) * 160.0), // 简单的堆叠策略
+        bottom: 20 + (stackIndex * 160.0),
         width: 300,
         child: Material(
           color: Colors.transparent,
@@ -438,10 +413,11 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, size: 18),
-                      onPressed: () {
-                         _removeOverlay(taskId);
-                         // 点击关闭视为“未完成/稍后”
-                         _resetIncompleteTask(taskProvider, taskId);
+                      onPressed: () async {
+                        _removeOverlay(overlayKey);
+                        if (taskId != null) {
+                          await _resetIncompleteTask(taskProvider, taskId);
+                        }
                       },
                     ),
                   ],
@@ -453,21 +429,81 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
+                StreamBuilder<int>(
+                  stream: Stream.periodic(const Duration(seconds: 1), (i) => i),
+                  builder: (context, snapshot) {
+                    final info = _pendingDialogs[overlayKey];
+                    const total = Duration(minutes: 10);
+                    if (info == null) return const SizedBox.shrink();
+                    final elapsed = DateTime.now().difference(info.showTime);
+                    final remaining = total - elapsed;
+                    final remain = remaining.isNegative ? Duration.zero : remaining;
+                    if (remain == Duration.zero && !_timeoutHandledKeys.contains(overlayKey)) {
+                      _timeoutHandledKeys.add(overlayKey);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _handleOverlayTimeout(overlayKey, taskId, taskProvider);
+                      });
+                    }
+                    final m = remain.inMinutes.remainder(60).toString().padLeft(2, '0');
+                    final s = remain.inSeconds.remainder(60).toString().padLeft(2, '0');
+                    final blink = remain.inSeconds.isEven;
+                    final countdownStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).colorScheme.primary,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        );
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '自动关闭',
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context).colorScheme.outline,
+                                    ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(m, style: countdownStyle),
+                              AnimatedOpacity(
+                                opacity: blink ? 1 : 0.25,
+                                duration: const Duration(milliseconds: 250),
+                                child: Text(':', style: countdownStyle),
+                              ),
+                              Text(s, style: countdownStyle),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(
+                            value: null,
+                            minHeight: 3,
+                            backgroundColor: Colors.transparent,
+                            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.35),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
                 const SizedBox(height: 12),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
-                      onPressed: () {
-                        _removeOverlay(taskId);
-                        _resetIncompleteTask(taskProvider, taskId);
+                      onPressed: () async {
+                        _removeOverlay(overlayKey);
+                        if (taskId != null) {
+                          await _resetIncompleteTask(taskProvider, taskId);
+                        }
                       },
                       child: const Text('下次再做'),
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
                       onPressed: () async {
-                        _removeOverlay(taskId);
+                        _removeOverlay(overlayKey);
                         
                         // 提前获取 ScaffoldMessengerState，避免异步操作后 context 失效
                         // 使用 navigatorKey.currentContext 更安全
@@ -476,7 +512,12 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
                             : (context.mounted ? ScaffoldMessenger.of(context) : null);
                         
                         // 1. 标记任务完成
-                        taskProvider.toggleTaskCompletion(taskId);
+                        if (taskId != null) {
+                          final task = taskProvider.getTaskById(taskId);
+                          if (task != null && !task.isCompleted) {
+                            await taskProvider.toggleTaskCompletion(taskId);
+                          }
+                        }
                         
                         // 2. 标记当前时间块为已完成 (避免被误删)
                         final dailyPlanProvider = context.read<DailyPlanProvider>();
@@ -504,14 +545,6 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
                     ),
                   ],
                 ),
-                // 简单的倒计时进度条示意 (可选)
-                const SizedBox(height: 4),
-                LinearProgressIndicator(
-                  value: null, // 循环动画，表示在倒计时中
-                  minHeight: 2,
-                  backgroundColor: Colors.transparent,
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-                ),
               ],
             ),
           ),
@@ -520,12 +553,15 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
     );
   }
 
-  void _removeOverlay(String taskId) {
-    if (_activeOverlays.containsKey(taskId)) {
-      _activeOverlays[taskId]?.remove();
-      _activeOverlays.remove(taskId);
+  void _removeOverlay(String overlayKey) {
+    if (_activeOverlays.containsKey(overlayKey)) {
+      _activeOverlays[overlayKey]?.remove();
+      _activeOverlays.remove(overlayKey);
     }
-    _pendingDialogs.remove(taskId);
+    _pendingDialogs.remove(overlayKey);
+    if (mounted) {
+      context.read<PendingTimeBlockProvider>().clearPending(overlayKey);
+    }
   }
 
   String? _extractTaskId(String description) {
@@ -556,45 +592,5 @@ class ScheduleMonitorContentState extends State<ScheduleMonitorContent> {
   @override
   Widget build(BuildContext context) {
     return widget.child;
-  }
-
-  /// 调试方法：立即触发当前时间（或最近结束）的事件提醒
-  void debugTriggerCurrentEvent() {
-    final scheduleProvider = context.read<ScheduleProvider>();
-    final taskProvider = context.read<TaskListProvider>();
-    final now = DateTime.now();
-
-    // 查找“当前正在进行”或“刚刚结束”的事件
-    // 为了测试，我们放宽条件：查找今天内，结束时间在 [now - 1h, now + 1h] 范围内的最近一个事件
-    // 或者直接找正在进行的事件，并强制结束它？
-    // 用户的需求是：测试的任务是“目前时间对应的时间块任务”
-    
-    final events = scheduleProvider.getEventsForDate(now);
-    final blocks = events.where((e) => !e.allDay).toList();
-    
-    CalendarEvent? targetEvent;
-    
-    // 1. 优先找正在进行的（start <= now <= end）
-    try {
-      targetEvent = blocks.firstWhere((e) => e.start.isBefore(now) && e.end.isAfter(now));
-    } catch (_) {
-      // 2. 如果没有正在进行的，找刚刚结束的
-       try {
-         targetEvent = blocks.where((e) => e.end.isBefore(now)).last; // 最后一个结束的
-       } catch (_) {}
-    }
-    
-    if (targetEvent != null) {
-      debugPrint('Debug Trigger: Found event ${targetEvent.title}');
-      _triggerCompletionFlow(targetEvent, taskProvider);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已手动触发测试：${targetEvent.title}')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前时间没有对应的时间块任务')),
-      );
-    }
   }
 }

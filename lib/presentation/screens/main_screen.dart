@@ -142,22 +142,6 @@ class _MainScreenState extends State<MainScreen> {
                                 context.read<ThemeProvider>().setMode(newMode);
                               },
                             ),
-                            const SizedBox(height: 6),
-                            IconButton(
-                              tooltip: '手动触发任务清理',
-                              icon: const Icon(Icons.cleaning_services_outlined),
-                              onPressed: () {
-                                // 查找 ScheduleMonitorContentState 并触发测试
-                                final state = context.findAncestorStateOfType<ScheduleMonitorContentState>();
-                                if (state != null) {
-                                  state.debugTriggerCleanup();
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('未找到 ScheduleMonitorContentState')),
-                                  );
-                                }
-                              },
-                            ),
                           ],
                         ),
                       ),

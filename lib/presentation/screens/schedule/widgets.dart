@@ -1,11 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:provider/provider.dart';
 import 'models.dart';
+import '../../providers/pending_time_block_provider.dart';
 
 class EventPill extends StatelessWidget {
 	final String title;
 	final Color color;
-	const EventPill({super.key, required this.title, required this.color});
+	final bool isCompleted;
+	final bool isPending;
+	const EventPill({
+		super.key,
+		required this.title,
+		required this.color,
+		this.isCompleted = false,
+		this.isPending = false,
+	});
 
 	@override
 	Widget build(BuildContext context) {
@@ -18,15 +28,28 @@ class EventPill extends StatelessWidget {
 				color: color.withOpacity(0.2),
 				borderRadius: BorderRadius.circular(999),
 			),
-			child: Text(
-				title,
-				style: theme.textTheme.bodySmall?.copyWith(
-					color: color,
-					fontWeight: FontWeight.w600,
-					height: 1.1,
-				),
-				overflow: TextOverflow.ellipsis,
-				maxLines: 1,
+			child: Row(
+				children: [
+					if (isCompleted) ...[
+						Icon(Icons.check_circle, size: 12, color: color),
+						const SizedBox(width: 4),
+					] else if (isPending) ...[
+						Icon(Icons.help_outline, size: 12, color: color),
+						const SizedBox(width: 4),
+					],
+					Expanded(
+						child: Text(
+							title,
+							style: theme.textTheme.bodySmall?.copyWith(
+								color: color,
+								fontWeight: FontWeight.w600,
+								height: 1.1,
+							),
+							overflow: TextOverflow.ellipsis,
+							maxLines: 1,
+						),
+					),
+				],
 			),
 		);
 	}
@@ -44,6 +67,7 @@ class EventList extends StatelessWidget {
 	@override
 	Widget build(BuildContext context) {
 		final theme = Theme.of(context);
+		final pendingProvider = context.watch<PendingTimeBlockProvider>();
 		if (events.isEmpty) return const SizedBox.shrink();
 		return LayoutBuilder(
 			builder: (context, constraints) {
@@ -75,7 +99,12 @@ class EventList extends StatelessWidget {
 									if (ev.buttons != kSecondaryMouseButton) return;
 									onSecondaryTapEvent!(e, ev.position);
 								},
-								child: EventPill(title: e.title, color: e.color),
+								child: EventPill(
+									title: e.title,
+									color: e.color,
+									isCompleted: e.isCompleted,
+									isPending: pendingProvider.isPending(e.id),
+								),
 							),
 						if (overflow > 0)
 							Text('其他$overflow个', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
@@ -259,6 +288,7 @@ class DayCell extends StatelessWidget {
 		}
 
 		Widget eventPillWithMenu(CalendarEvent e, Color color) {
+			final pendingProvider = context.watch<PendingTimeBlockProvider>();
 			return Listener(
 				behavior: HitTestBehavior.opaque,
 				onPointerDown: (ev) {
@@ -267,7 +297,12 @@ class DayCell extends StatelessWidget {
 					if (ev.buttons != kSecondaryMouseButton) return;
 					showDeleteMenu(e, ev.position);
 				},
-				child: EventPill(title: e.title, color: color),
+				child: EventPill(
+					title: e.title,
+					color: color,
+					isCompleted: e.isCompleted,
+					isPending: pendingProvider.isPending(e.id),
+				),
 			);
 		}
 

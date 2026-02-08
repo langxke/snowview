@@ -14,6 +14,7 @@ import '../providers/task_list_provider.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/daily_plan_provider.dart'; // Import DailyPlanProvider
 import 'tasks/widgets/task_list_panel.dart';
+import '../widgets/schedule_monitor.dart';
 
 import '../../data/models/calendar_event_hive.dart'; // Add import
 import '../../data/models/daily_plan_hive.dart';
@@ -200,7 +201,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                 Expanded(
                   child: Column(
                     children: [
-                      _buildHeader(context),
+                      _buildHeader(context, allEvents),
                       const Divider(height: 1),
                       Expanded(child: _buildMainCalendarArea(context, allEvents, plans)), // Pass data
                     ],
@@ -212,7 +213,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     );
   }
 
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(BuildContext context, List<CalendarEvent> allEvents) {
     final years = List<int>.generate(
       _yearRange * 2 + 1,
       (i) => DateTime.now().year - _yearRange + i,

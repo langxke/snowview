@@ -31,6 +31,7 @@ import 'services/ai_context_builder.dart';
 import 'services/calendar_database_service.dart'; // Import CalendarDatabaseService
 import 'presentation/providers/ai_provider.dart';
 import 'presentation/providers/daily_plan_provider.dart'; // Import DailyPlanProvider
+import 'presentation/providers/pending_time_block_provider.dart';
 import 'presentation/widgets/schedule_monitor.dart';
 
 Future<void> main() async {
@@ -122,6 +123,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => TaskProvider()),
         ChangeNotifierProvider(create: (_) => ScheduleProvider()),
+        ChangeNotifierProvider(create: (_) => PendingTimeBlockProvider()),
         ChangeNotifierProvider(
           create: (_) => FocusProvider(FocusSessionRepository()),
         ),

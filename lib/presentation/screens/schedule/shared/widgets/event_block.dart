@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../models.dart';
 import '../utils/time_utils.dart';
 import 'resize_handle.dart';
+import '../../../../providers/pending_time_block_provider.dart';
 
 /// 日历事件块组件
 /// 
@@ -71,11 +73,13 @@ class CalendarEventBlock extends StatelessWidget {
                                  isSelected && 
                                  height > resizeHandleHeight;
 
-    // 判断是否为过期未完成事件
-    final bool isExpiredIncomplete = !event.isCompleted && event.end.isBefore(DateTime.now());
+    final bool isPending = context.select<PendingTimeBlockProvider, bool>(
+      (p) => p.isPending(event.id),
+    );
 
-    // 定义样式颜色
-    final baseColor = isExpiredIncomplete ? Colors.grey : event.color;
+    // 判断是否为过期未完成事件（询问态不算未完成）
+    final bool isExpiredIncomplete = !event.isCompleted && !isPending && event.end.isBefore(DateTime.now());
+
     final handleColor = isExpiredIncomplete ? Colors.grey : event.color;
 
     return Positioned(
@@ -87,7 +91,7 @@ class CalendarEventBlock extends StatelessWidget {
       child: Stack(
         children: [
           // 主活动块
-          _buildMainBlock(isExpiredIncomplete),
+          _buildMainBlock(isExpiredIncomplete, isPending),
           
           // 顶部调整手柄
           if (canShowHandles && onTopResizeStart != null)
@@ -116,7 +120,7 @@ class CalendarEventBlock extends StatelessWidget {
   }
 
   /// 构建主活动块
-  Widget _buildMainBlock(bool isExpiredIncomplete) {
+  Widget _buildMainBlock(bool isExpiredIncomplete, bool isPending) {
     // 根据状态决定颜色
     final bgColor = isExpiredIncomplete 
         ? Colors.grey.withOpacity(0.1) // 极浅灰背景
@@ -139,15 +143,15 @@ class CalendarEventBlock extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: height <= 30 
-            ? _buildCompactLayout(isExpiredIncomplete) 
-            : _buildExpandedLayout(isExpiredIncomplete),
+            ? _buildCompactLayout(isExpiredIncomplete, isPending) 
+            : _buildExpandedLayout(isExpiredIncomplete, isPending),
       ),
     );
   }
 
   /// 构建紧凑布局（高度 <= 30px）
   /// 单行显示标题和时间
-  Widget _buildCompactLayout(bool isExpiredIncomplete) {
+  Widget _buildCompactLayout(bool isExpiredIncomplete, bool isPending) {
     final textColor = isExpiredIncomplete
         ? Colors.grey.withOpacity(0.7)
         : event.color.withOpacity(0.9);
@@ -156,6 +160,9 @@ class CalendarEventBlock extends StatelessWidget {
       children: [
         if (event.isCompleted) ...[
           Icon(Icons.check_circle, size: 12, color: event.color),
+          const SizedBox(width: 4),
+        ] else if (isPending) ...[
+          Icon(Icons.help_outline, size: 12, color: event.color),
           const SizedBox(width: 4),
         ] else if (isExpiredIncomplete) ...[
           Icon(Icons.cancel, size: 12, color: textColor),
@@ -179,7 +186,7 @@ class CalendarEventBlock extends StatelessWidget {
 
   /// 构建展开布局（高度 > 30px）
   /// 多行显示标题和时间
-  Widget _buildExpandedLayout(bool isExpiredIncomplete) {
+  Widget _buildExpandedLayout(bool isExpiredIncomplete, bool isPending) {
     final titleColor = isExpiredIncomplete
         ? Colors.grey.withOpacity(0.7)
         : event.color.withOpacity(0.9);
@@ -195,6 +202,9 @@ class CalendarEventBlock extends StatelessWidget {
           children: [
             if (event.isCompleted) ...[
               Icon(Icons.check_circle, size: 14, color: event.color),
+              const SizedBox(width: 4),
+            ] else if (isPending) ...[
+              Icon(Icons.help_outline, size: 14, color: event.color),
               const SizedBox(width: 4),
             ] else if (isExpiredIncomplete) ...[
               Icon(Icons.cancel, size: 14, color: titleColor),
