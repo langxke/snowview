@@ -41,16 +41,60 @@ class DayWeekAiScheduler {
   ];
   static const Set<int> _defaultWorkdays = <int>{1, 2, 3, 4, 5};
 
-  static void _logLong(String tag, String message) {
-    const chunk = 900;
-    if (message.length <= chunk) {
-      debugPrint('[$tag] $message');
-      return;
+  static const String _logTag = 'AI安排';
+
+  static void _logLine({required String traceId, required String message}) {
+    if (!kDebugMode) return;
+    debugPrint('[$_logTag][$traceId] $message');
+  }
+
+  static List<String> _splitToLogLines(String text, {int maxLineLength = 240}) {
+    final normalized = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final out = <String>[];
+    for (final rawLine in normalized.split('\n')) {
+      if (rawLine.length <= maxLineLength) {
+        out.add(rawLine);
+        continue;
+      }
+      for (int i = 0; i < rawLine.length; i += maxLineLength) {
+        final end = (i + maxLineLength < rawLine.length) ? i + maxLineLength : rawLine.length;
+        out.add(rawLine.substring(i, end));
+      }
     }
-    for (int i = 0; i < message.length; i += chunk) {
-      final end = (i + chunk < message.length) ? i + chunk : message.length;
-      debugPrint('[$tag] ${message.substring(i, end)}');
+    return out;
+  }
+
+  static String _tryPrettyJsonText(String text) {
+    try {
+      final decoded = jsonDecode(text);
+      return const JsonEncoder.withIndent('  ').convert(decoded);
+    } catch (_) {
+      return text;
     }
+  }
+
+  static void _logBlock({
+    required String traceId,
+    required String title,
+    required String content,
+    bool prettyJson = false,
+  }) {
+    final body = prettyJson ? _tryPrettyJsonText(content) : content;
+    final lines = _splitToLogLines(body);
+    _logLine(traceId: traceId, message: 'BEGIN $title');
+    if (prettyJson) {
+      debugPrint('```json');
+    } else {
+      debugPrint('```');
+    }
+    for (final line in lines) {
+      if (!kDebugMode) break;
+      debugPrint(line);
+    }
+    if (kDebugMode) {
+      debugPrint('```');
+    }
+    _logLine(traceId: traceId, message: 'END $title');
   }
 
   static DateTime _dayStart(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -512,17 +556,23 @@ class DayWeekAiScheduler {
 
     final closeLoading = _showBlockingLoading(context, 'AI 正在生成时间安排…');
     final scopeKey = scopeLabel == '当天' ? 'day' : 'week';
+    final traceId = '${DateTime.now().millisecondsSinceEpoch}-$scopeKey';
+    final stopwatch = Stopwatch()..start();
     try {
-      debugPrint('[DayWeekAiScheduler] smartSchedule start scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd');
+      _logLine(
+        traceId: traceId,
+        message: 'START scope=$scopeLabel rangeStart=$rangeStart rangeEnd=$rangeEnd tasks=${sourceTasks.length} busy=${busyEvents.length}',
+      );
       final plan = await _callTimeBlockSchedulingAI(
         aiService: aiService,
         rangeStart: rangeStart,
         rangeEnd: rangeEnd,
         busyEvents: busyEvents,
         candidates: sourceTasks,
+        traceId: traceId,
       ).timeout(const Duration(seconds: 90));
 
-      debugPrint('[DayWeekAiScheduler] smartSchedule plan size=${plan.blocks.length}');
+      _logLine(traceId: traceId, message: 'AI_OK blocks=${plan.blocks.length}');
 
       await _saveReasoning(scopeLabel: scopeKey, reasoning: plan.reasoning);
 
@@ -532,9 +582,6 @@ class DayWeekAiScheduler {
       final removedFromTodoTaskIds = <String>{};
       for (int i = 0; i < plan.blocks.length; i++) {
         final block = plan.blocks[i];
-        debugPrint(
-          '[DayWeekAiScheduler] createEvent[$i/${plan.blocks.length}] taskId=${block.taskId} start=${block.start.toIso8601String()} end=${block.end.toIso8601String()}',
-        );
         final originDateKey = todoOwnerDateKeyByTaskId[block.taskId];
         final originDate = originDateKey == null ? null : _tryParseDateOnlyKey(originDateKey);
         
@@ -554,7 +601,6 @@ class DayWeekAiScheduler {
         await dailyPlanProvider.addScheduledEvent(block.start, event);
 
         // 关键修复：任务被安排到时间块后，从今日待办中移除
-        debugPrint('[DayWeekAiScheduler] removing todo task: date=${block.start} taskId=${block.taskId}');
         if (removedFromTodoTaskIds.add(block.taskId)) {
           await dailyPlanProvider.removeTodoTask(originDate ?? block.start, block.taskId);
         }
@@ -565,7 +611,11 @@ class DayWeekAiScheduler {
         await Future<void>.delayed(Duration.zero);
       }
 
-      debugPrint('[DayWeekAiScheduler] smartSchedule created=$created');
+      stopwatch.stop();
+      _logLine(
+        traceId: traceId,
+        message: 'DONE created=$created blocks=${plan.blocks.length} removedTodo=${removedFromTodoTaskIds.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
 
       if (!context.mounted) return;
       scheduleProvider.refresh();
@@ -573,7 +623,8 @@ class DayWeekAiScheduler {
         SnackBar(content: Text('AI 已生成 $created 个时间块')),
       );
     } catch (e) {
-      debugPrint('[DayWeekAiScheduler] smartSchedule error=$e');
+      stopwatch.stop();
+      _logLine(traceId: traceId, message: 'FAILED elapsedMs=${stopwatch.elapsedMilliseconds} error=$e');
       final errText = e.toString();
       if (errText.contains('输出解析失败') || errText.contains('JSON')) {
         await _saveReasoning(scopeLabel: scopeKey, reasoning: 'AI 输出解析失败：$errText');
@@ -659,10 +710,6 @@ class DayWeekAiScheduler {
             
             // 检查是否在请求的时间范围内 (虽然 getPlansForRange 已经筛选了日期，但 DailyPlan 是按天聚合的)
             if (e.start.isBefore(rangeStart) || e.end.isAfter(rangeEnd)) continue;
-
-            debugPrint(
-                '[DayWeekAiScheduler] deleteAiEvent eventId=${e.id} start=${e.start.toIso8601String()} end=${e.end.toIso8601String()}',
-            );
             
             // 同步清理 DailyPlan (embedded)
             // 注意：DailyPlanProvider.removeScheduledEvent 需要传入日期
@@ -907,7 +954,9 @@ class DayWeekAiScheduler {
     required DateTime rangeEnd,
     required List<CalendarEvent> busyEvents,
     required List<dynamic> candidates,
+    String? traceId,
   }) async {
+    final tid = traceId ?? DateTime.now().millisecondsSinceEpoch.toString();
     final normalizedRangeStart = DateUtilsEx.floorToMinute(rangeStart);
     final normalizedRangeEnd = DateUtilsEx.floorToMinute(rangeEnd);
 
@@ -1039,8 +1088,10 @@ class DayWeekAiScheduler {
 
     final daysWithFree = freeWindowsByDayKey.entries.where((e) => e.value.isNotEmpty).length;
     final daysTotal = freeWindowsByDayKey.length;
-    debugPrint(
-      '[DayWeekAiScheduler] freeWindows summary daysWithFree=$daysWithFree/$daysTotal effectiveRangeStart=$effectiveRangeStart effectiveRangeEnd=$effectiveRangeEnd',
+    _logLine(
+      traceId: tid,
+      message:
+          'freeWindows daysWithFree=$daysWithFree/$daysTotal effectiveRangeStart=$effectiveRangeStart effectiveRangeEnd=$effectiveRangeEnd',
     );
 
     final systemPrompt =
@@ -1150,7 +1201,12 @@ class DayWeekAiScheduler {
       }
     });
 
-    _logLong('DayWeekAiScheduler', 'Request userPrompt=$userPrompt');
+    _logBlock(
+      traceId: tid,
+      title: 'AI_IN userPrompt',
+      content: userPrompt,
+      prettyJson: true,
+    );
 
     int maxJsonParseRetries = 3;
     try {
@@ -1357,7 +1413,7 @@ class DayWeekAiScheduler {
     }
 
     for (int attempt = 1; attempt <= maxJsonParseRetries; attempt++) {
-      _logLong('DayWeekAiScheduler', 'AI request attempt=$attempt max=$maxJsonParseRetries');
+      _logLine(traceId: tid, message: 'AI_OUT attempt=$attempt/$maxJsonParseRetries');
       final messages = <OpenAIChatMessage>[
         if (attempt > 1 && lastWasValidationError)
           OpenAIChatMessage.text(
@@ -1395,12 +1451,16 @@ class DayWeekAiScheduler {
         );
 
         final msg = resp.choices.isNotEmpty ? resp.choices.first.message : null;
-        _logLong('DayWeekAiScheduler', 'AI message.toJson=${jsonEncode(msg?.toJson() ?? {})}');
         final text = msg?.textContent ?? '';
         lastRawText = text;
-        _logLong('DayWeekAiScheduler', 'AI raw textContent=$text');
+        _logLine(
+          traceId: tid,
+          message: 'AI_OUT meta role=${msg?.role.toJson() ?? '<null>'} toolCalls=${msg?.toolCalls?.length ?? 0} textLen=${text.length}',
+        );
+        _logBlock(traceId: tid, title: 'AI_OUT raw textContent (attempt=$attempt)', content: text);
 
         final jsonStr = _extractJsonObject(text);
+        _logBlock(traceId: tid, title: 'AI_OUT extracted json (attempt=$attempt)', content: jsonStr, prettyJson: true);
         final decoded = jsonDecode(jsonStr);
         if (decoded is! Map) throw Exception('AI 输出不是 JSON 对象');
         // 兼容旧格式（直接返回 blocks）或新格式（返回 reasoning + schedule）
@@ -1456,7 +1516,7 @@ class DayWeekAiScheduler {
         break;
       } catch (e) {
         lastError = e is Exception ? e : Exception(e.toString());
-        _logLong('DayWeekAiScheduler', 'AI parse attempt=$attempt failed error=$e');
+        _logLine(traceId: tid, message: 'AI_OUT attempt=$attempt failed error=$e');
         blocksRaw = null;
         reasoning = '';
         lastWasValidationError = false;
