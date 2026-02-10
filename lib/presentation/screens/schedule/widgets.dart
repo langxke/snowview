@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'models.dart';
+import 'shared/widgets/context_menu_route.dart';
 import '../../providers/pending_time_block_provider.dart';
 
 class EventPill extends StatelessWidget {
@@ -257,27 +258,26 @@ class DayCell extends StatelessWidget {
 
 		Future<void> showDeleteMenu(CalendarEvent event, Offset globalPosition) async {
 			if (onDeleteEvent == null) return;
-			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-			final selected = await showMenu<bool>(
+			final selected = await showContextMenuAt<bool>(
 				context: context,
-				position: RelativeRect.fromLTRB(
-					globalPosition.dx,
-					globalPosition.dy,
-					overlay.size.width - globalPosition.dx,
-					overlay.size.height - globalPosition.dy,
-				),
-				items: const [
-					PopupMenuItem<bool>(
-						value: true,
-						child: Row(
+				position: globalPosition,
+				builder: (menuContext) {
+					return const ContextMenuSurface(
+						maxWidth: 200,
+						child: Column(
+							mainAxisSize: MainAxisSize.min,
+							crossAxisAlignment: CrossAxisAlignment.stretch,
 							children: [
-								Icon(Icons.delete_outline, size: 18, color: Colors.red),
-								SizedBox(width: 8),
-								Text('删除', style: TextStyle(color: Colors.red)),
+								ContextMenuActionTile<bool>(
+									icon: Icons.delete_outline,
+									text: '删除',
+									value: true,
+									color: Colors.red,
+								),
 							],
 						),
-					),
-				],
+					);
+				},
 			);
 			if (selected == true) {
 				final result = onDeleteEvent!(event);
@@ -308,27 +308,26 @@ class DayCell extends StatelessWidget {
 
 		Future<void> showRemovePlanItemMenu(MonthPlanItem item, Offset globalPosition) async {
 			if (onRemovePlanItem == null) return;
-			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-			final selected = await showMenu<bool>(
+			final selected = await showContextMenuAt<bool>(
 				context: context,
-				position: RelativeRect.fromLTRB(
-					globalPosition.dx,
-					globalPosition.dy,
-					overlay.size.width - globalPosition.dx,
-					overlay.size.height - globalPosition.dy,
-				),
-				items: const [
-					PopupMenuItem<bool>(
-						value: true,
-						child: Row(
+				position: globalPosition,
+				builder: (menuContext) {
+					return const ContextMenuSurface(
+						maxWidth: 220,
+						child: Column(
+							mainAxisSize: MainAxisSize.min,
+							crossAxisAlignment: CrossAxisAlignment.stretch,
 							children: [
-								Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
-								SizedBox(width: 8),
-								Text('从当天移除', style: TextStyle(color: Colors.red)),
+								ContextMenuActionTile<bool>(
+									icon: Icons.remove_circle_outline,
+									text: '从当天移除',
+									value: true,
+									color: Colors.red,
+								),
 							],
 						),
-					),
-				],
+					);
+				},
 			);
 			if (selected == true) {
 				await onRemovePlanItem!(date, item);
@@ -359,48 +358,36 @@ class DayCell extends StatelessWidget {
 		}
 
 		Future<void> showCellMenu(Offset globalPosition) async {
-			final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-			final selected = await showMenu<_MonthCellAction>(
+			final selected = await showContextMenuAt<_MonthCellAction>(
 				context: context,
-				position: RelativeRect.fromLTRB(
-					globalPosition.dx,
-					globalPosition.dy,
-					overlay.size.width - globalPosition.dx,
-					overlay.size.height - globalPosition.dy,
-				),
-				items: const [
-					PopupMenuItem<_MonthCellAction>(
-						value: _MonthCellAction.addTodoTask,
-						child: Row(
+				position: globalPosition,
+				builder: (menuContext) {
+					return const ContextMenuSurface(
+						maxWidth: 240,
+						child: Column(
+							mainAxisSize: MainAxisSize.min,
+							crossAxisAlignment: CrossAxisAlignment.stretch,
 							children: [
-								Icon(Icons.playlist_add, size: 18),
-								SizedBox(width: 8),
-								Text('新增待办'),
+								ContextMenuActionTile<_MonthCellAction>(
+									icon: Icons.playlist_add,
+									text: '新增待办',
+									value: _MonthCellAction.addTodoTask,
+								),
+								ContextMenuActionTile<_MonthCellAction>(
+									icon: Icons.task_alt,
+									text: '新增全天任务',
+									value: _MonthCellAction.addAllDayTask,
+								),
+								ContextMenuDivider(),
+								ContextMenuActionTile<_MonthCellAction>(
+									icon: Icons.event_available,
+									text: '新增日程',
+									value: _MonthCellAction.addEvent,
+								),
 							],
 						),
-					),
-					PopupMenuItem<_MonthCellAction>(
-						value: _MonthCellAction.addAllDayTask,
-						child: Row(
-							children: [
-								Icon(Icons.task_alt, size: 18),
-								SizedBox(width: 8),
-								Text('新增全天任务'),
-							],
-						),
-					),
-					PopupMenuDivider(),
-					PopupMenuItem<_MonthCellAction>(
-						value: _MonthCellAction.addEvent,
-						child: Row(
-							children: [
-								Icon(Icons.event_available, size: 18),
-								SizedBox(width: 8),
-								Text('新增日程'),
-							],
-						),
-					),
-				],
+					);
+				},
 			);
 
 			if (selected == null) return;

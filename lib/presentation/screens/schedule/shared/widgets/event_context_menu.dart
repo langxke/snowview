@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models.dart';
 import '../utils/event_utils.dart';
+import 'context_menu_route.dart';
 import 'editable_text_field.dart';
 
 /// 事件右键上下文菜单系统
@@ -32,130 +33,126 @@ class EventContextMenu {
   }) {
     final colorOptions = eventColors;
 
-    showDialog(
+    showContextMenuAt<void>(
       context: context,
-      barrierColor: Colors.transparent,
-      barrierDismissible: true,
-      builder: (dialogContext) {
-        return Stack(
-          children: [
-            Positioned(
-              left: position.dx,
-              top: position.dy,
-              child: Material(
-                elevation: 8,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 280),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 8,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 颜色选项行
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: colorOptions.map((color) {
-                            final isSelected = event.color == color;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.of(dialogContext).pop();
-                                  EventUtils.updateColor(
-                                    originalEvent: event,
-                                    newColor: color,
-                                    onUpdateEvent: onUpdateEvent,
-                                  );
-                                },
-                                child: Container(
-                                  width: 24,
-                                  height: 24,
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: isSelected ? Colors.black : Colors.grey.withOpacity(0.3),
-                                      width: isSelected ? 3 : 1,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 2,
-                                        offset: const Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      // 修改名称输入框
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.edit, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: EventEditableTextField(
-                                initialText: event.title,
-                                event: event,
+      position: position,
+      builder: (menuContext) {
+        final maxHeight = MediaQuery.sizeOf(menuContext).height - 16;
+        return Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: 280, maxHeight: maxHeight),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black26,
+                  blurRadius: 8,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: colorOptions.map((color) {
+                        final isSelected = event.color == color;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: GestureDetector(
+                            onTap: () {
+                              Navigator.of(menuContext).pop();
+                              EventUtils.updateColor(
+                                originalEvent: event,
+                                newColor: color,
                                 onUpdateEvent: onUpdateEvent,
+                              );
+                            },
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                color: color,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isSelected ? Colors.black : Colors.grey.withOpacity(0.3),
+                                  width: isSelected ? 3 : 1,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 2,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      // 其他操作按钮
-                      _buildMenuButton(Icons.copy, '复制', () {
-                        Navigator.of(dialogContext).pop();
-                        EventUtils.copyToClipboard(event, context);
-                      }),
-                      _buildMenuButton(Icons.paste, '粘贴', () {
-                        Navigator.of(dialogContext).pop();
-                        EventUtils.pasteFromClipboard(
-                          context: context,
-                          date: targetDate,
-                          selectedStartQuarter: selectedStartQuarter,
-                          selectedEndQuarter: selectedEndQuarter,
-                          onAddEvent: onAddEvent,
+                          ),
                         );
-                      }),
-                      _buildMenuButton(Icons.content_copy, '创建副本', () {
-                        Navigator.of(dialogContext).pop();
-                        EventUtils.createDuplicate(
-                          event: event,
-                          context: context,
-                          onAddEvent: onAddEvent,
-                        );
-                      }),
-                      const Divider(height: 1),
-                      _buildMenuButton(Icons.delete, '删除', () {
-                        Navigator.of(dialogContext).pop();
-                        onDeleteEvent();
-                      }, color: Colors.red),
-                    ],
+                      }).toList(),
+                    ),
                   ),
-                ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.edit, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: EventEditableTextField(
+                            initialText: event.title,
+                            event: event,
+                            onUpdateEvent: onUpdateEvent,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  _buildMenuButton(Icons.copy, '复制', () {
+                    Navigator.of(menuContext).pop();
+                    EventUtils.copyToClipboard(event, context);
+                  }),
+                  _buildMenuButton(Icons.paste, '粘贴', () {
+                    Navigator.of(menuContext).pop();
+                    EventUtils.pasteFromClipboard(
+                      context: context,
+                      date: targetDate,
+                      selectedStartQuarter: selectedStartQuarter,
+                      selectedEndQuarter: selectedEndQuarter,
+                      onAddEvent: onAddEvent,
+                    );
+                  }),
+                  _buildMenuButton(Icons.content_copy, '创建副本', () {
+                    Navigator.of(menuContext).pop();
+                    EventUtils.createDuplicate(
+                      event: event,
+                      context: context,
+                      onAddEvent: onAddEvent,
+                    );
+                  }),
+                  const Divider(height: 1),
+                  _buildMenuButton(
+                    Icons.delete,
+                    '删除',
+                    () {
+                      Navigator.of(menuContext).pop();
+                      onDeleteEvent();
+                    },
+                    color: Colors.red,
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
         );
       },
     );
